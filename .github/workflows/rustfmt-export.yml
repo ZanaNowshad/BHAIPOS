@@ -27,3 +27,4 @@ jobs:
           name: rustfmt-patch
           path: rustfmt.patch
           if-no-files-found: error
+# rerun after parser correction
