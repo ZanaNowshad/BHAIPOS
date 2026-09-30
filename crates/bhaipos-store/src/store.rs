@@ -650,7 +650,7 @@ impl Store {
         }else{None};
         let (business_date,branch_code,close_hour)=Self::business_date_for(&tx,req.tenant_id,req.branch_id,req.now)?;
         let sequence=Self::next_receipt_sequence(&tx,req.tenant_id,req.branch_id,&business_date)?;
-        let receipt_number=format!("{}-{}-{:06}",branch_code,business_date.replace('-',''),sequence);
+        let receipt_number=format!("{}-{}-{:06}",branch_code,business_date.replace('-', ""),sequence);
         let sale_id=SaleId::new();
         tx.execute("INSERT INTO sales(id,tenant_id,branch_id,device_id,register_id,cash_session_id,cart_id,cashier_user_id,customer_id,operation_id,receipt_number,business_date,subtotal_fils,tax_fils,total_fils,cogs_fils,completed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",params![sale_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.register_id.to_string(),req.cash_session_id.map(|x|x.to_string()),req.cart_id.to_string(),req.user_id.to_string(),customer,req.operation_id.to_string(),receipt_number,business_date,subtotal.0,tax_total.0,total.0,cogs.0,req.now.to_rfc3339()])?;
         let centre_id:String=tx.query_row("SELECT id FROM inventory_centres WHERE tenant_id=?1 AND branch_id=?2 ORDER BY CASE WHEN centre_type='SHOP_FLOOR' THEN 0 ELSE 1 END LIMIT 1",params![req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?.ok_or(StoreError::NotFound("inventory centre"))?;
