@@ -1,0 +1,19 @@
+[package]
+name = "bhaipos-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bhaipos-core = { path = "../../../crates/bhaipos-core" }
+bhaipos-store = { path = "../../../crates/bhaipos-store" }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Printing"] }

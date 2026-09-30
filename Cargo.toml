@@ -1,0 +1,26 @@
+[workspace]
+members = [
+  "crates/bhaipos-core",
+  "crates/bhaipos-store",
+  "apps/desktop/src-tauri"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["BHAIPOS"]
+
+[workspace.dependencies]
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
