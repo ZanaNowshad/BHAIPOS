@@ -1,5 +1,5 @@
 use bhaipos_core::{
-    compute_audit_hash, hash_secret, price_times_quantity, sha256_hex, sign_sync_mutation,
+    compute_audit_hash, hash_pin, hash_secret, price_times_quantity, sha256_hex, sign_sync_mutation,
     verify_approval, verify_pin, verify_secret, verify_sync_mutation, ApprovalBinding,
     AuditMaterial, BranchId, CartId, DeviceId, Money, OperationId, ProductId, QuantityMilli,
     RegisterId, SaleId, SyncMutationEnvelope, SyncMutationMaterial, TaxCategory, TaxRule, TenantId,
@@ -12,8 +12,11 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[path = "customer_ops.rs"]
 mod customer_ops;
+#[path = "procurement.rs"]
 mod procurement;
+#[path = "production.rs"]
 mod production;
 
 const MIGRATION_0001: &str = include_str!("../../../migrations/0001_core.sql");
@@ -1824,7 +1827,7 @@ impl Store {
         } else {
             None
         };
-        let (business_date, branch_code, close_hour) =
+        let (business_date, branch_code, _close_hour) =
             Self::business_date_for(&tx, req.tenant_id, req.branch_id, req.now)?;
         let sequence =
             Self::next_receipt_sequence(&tx, req.tenant_id, req.branch_id, &business_date)?;
@@ -2931,7 +2934,7 @@ impl Store {
         tx.execute("DELETE FROM sync_delivery_leases WHERE mutation_id IN (SELECT id FROM sync_queue WHERE tenant_id=?1 AND device_id=?2 AND state='RETRYING')",params![context.tenant_id.to_string(),context.device_id.to_string()])?;
         let raw = {
             let mut statement=tx.prepare("SELECT sq.id,sq.operation_id,sq.entity_type,sq.entity_id,sq.mutation_type,sq.payload_json FROM sync_queue sq LEFT JOIN sync_retry_schedule srs ON srs.mutation_id=sq.id WHERE sq.tenant_id=?1 AND sq.branch_id=?2 AND sq.device_id=?3 AND sq.state IN ('PENDING','RETRYING') AND (srs.next_attempt_at IS NULL OR srs.next_attempt_at<=?4) ORDER BY sq.created_at,sq.id LIMIT ?5")?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -2950,8 +2953,8 @@ impl Store {
                             row.get::<_, String>(5)?,
                         ))
                     },
-                )?
-                .collect::<Result<Vec<_>, _>>()?
+                )?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut envelopes = Vec::with_capacity(raw.len());
         for (mutation_id, operation_id, entity_type, entity_id, mutation_type, payload_json) in raw
@@ -3574,7 +3577,7 @@ impl Store {
         )?;
         let movements = {
             let mut statement=tx.prepare("SELECT centre_id,product_id,quantity_milli,unit_cost_fils FROM inventory_movements WHERE tenant_id=?1 AND branch_id=?2 ORDER BY created_at,id")?;
-            statement
+            let rows = statement
                 .query_map(
                     params![context.tenant_id.to_string(), context.branch_id.to_string()],
                     |row| {
@@ -3585,8 +3588,8 @@ impl Store {
                             row.get::<_, i64>(3)?,
                         ))
                     },
-                )?
-                .collect::<Result<Vec<_>, _>>()?
+                )?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut ledger: HashMap<(String, String), (i64, Money)> = HashMap::new();
         for (centre, product, quantity, cost) in movements {
@@ -3611,12 +3614,12 @@ impl Store {
             let mut statement = tx.prepare(
                 "SELECT centre_id,product_id FROM stock_levels WHERE tenant_id=?1 AND branch_id=?2",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![context.tenant_id.to_string(), context.branch_id.to_string()],
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )?
-                .collect::<Result<Vec<_>, _>>()?
+                )?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         for key in cached_keys {
             ledger.entry(key).or_insert((0, Money::ZERO));
@@ -3785,7 +3788,7 @@ impl Store {
             .map_err(|_| StoreError::Validation("invalid transfer centre".into()))?;
         let lines = {
             let mut statement=tx.prepare("SELECT id,product_id,lot_id,requested_qty_milli FROM inventory_transfer_lines WHERE transfer_id=?1")?;
-            statement
+            let rows = statement
                 .query_map(params![transfer_id.to_string()], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -3793,8 +3796,8 @@ impl Store {
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, i64>(3)?,
                     ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+                })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         for (line, product, lot, quantity) in lines {
             let product_id = ProductId(
@@ -4142,7 +4145,7 @@ impl Store {
             .map_err(|_| StoreError::Validation("invalid stocktake centre".into()))?;
         let lines = {
             let mut statement=tx.prepare("SELECT id,product_id,expected_qty_milli,counted_qty_milli FROM stocktake_lines WHERE stocktake_id=?1")?;
-            statement
+            let rows = statement
                 .query_map(params![stocktake_id.to_string()], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -4150,8 +4153,8 @@ impl Store {
                         row.get::<_, i64>(2)?,
                         row.get::<_, Option<i64>>(3)?,
                     ))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+                })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut adjustments = 0_i64;
         let mut evidence = Vec::new();
