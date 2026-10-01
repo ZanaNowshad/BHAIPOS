@@ -13,7 +13,7 @@ Status vocabulary:
 
 - All fifteen SQLite migrations load into a clean in-memory database and can be reapplied safely.
 - 149 application tables created.
-- 173 integrity/security triggers created.
+- 174 integrity/security triggers created.
 - 93 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.

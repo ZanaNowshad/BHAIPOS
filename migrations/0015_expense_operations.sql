@@ -80,6 +80,21 @@ WHEN NOT EXISTS (SELECT 1 FROM expenses e WHERE e.id=NEW.expense_id AND e.tenant
  )
 BEGIN SELECT RAISE(ABORT,'TENANT_SCOPE_VIOLATION:expense_events'); END;
 
+CREATE TRIGGER IF NOT EXISTS guard_expense_event_state BEFORE INSERT ON expense_events
+WHEN NOT (
+  (NEW.event_type='CREATED'
+    AND EXISTS (SELECT 1 FROM expenses e WHERE e.id=NEW.expense_id AND e.tenant_id=NEW.tenant_id AND e.status='DRAFT')
+    AND NOT EXISTS (SELECT 1 FROM expense_events prior WHERE prior.expense_id=NEW.expense_id))
+  OR (NEW.event_type='SUBMITTED'
+    AND EXISTS (SELECT 1 FROM expenses e WHERE e.id=NEW.expense_id AND e.tenant_id=NEW.tenant_id AND e.status='DRAFT'))
+  OR (NEW.event_type IN ('APPROVED','REJECTED')
+    AND EXISTS (SELECT 1 FROM expenses e WHERE e.id=NEW.expense_id AND e.tenant_id=NEW.tenant_id AND e.status='SUBMITTED'))
+  OR (NEW.event_type='PAID'
+    AND EXISTS (SELECT 1 FROM expenses e WHERE e.id=NEW.expense_id AND e.tenant_id=NEW.tenant_id AND e.status='APPROVED')
+    AND EXISTS (SELECT 1 FROM expense_payments p WHERE p.expense_id=NEW.expense_id AND p.tenant_id=NEW.tenant_id AND p.operation_id=NEW.operation_id))
+)
+BEGIN SELECT RAISE(ABORT,'INVALID_EXPENSE_EVENT_STATE'); END;
+
 CREATE TRIGGER IF NOT EXISTS guard_expense_payments_insert BEFORE INSERT ON expense_payments
 WHEN typeof(NEW.amount_fils)!='integer' OR NEW.amount_fils<=0
  OR NOT EXISTS (
