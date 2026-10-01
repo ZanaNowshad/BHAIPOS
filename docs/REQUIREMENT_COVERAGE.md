@@ -43,7 +43,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 24 | OCR purchase entry | NOT STARTED | OCR proposal/review storage exists | Isolated provider, evidence storage and human approval UI required |
 | 25 | Expenses and operating profit | IMPLEMENTED — UNVERIFIED | `0015_expense_operations.sql`; exact-fils draft/submit/approve/reject/pay workflow; immutable event/payment evidence; payload-bound retries; trusted operating-profit report where net sales are tax-exclusive sale subtotals less tax-exclusive refund subtotals, then `gross profit = net sales - COGS` and `operating profit = gross profit - paid operating expenses` | Rust CI execution, attachments, approval thresholds, admin UI and cash-basis/accrual reporting options remain |
 | 26 | Customers, loyalty and credit | IN PROGRESS | `0013_customer_store_operations.sql`; canonical Bahrain phone handling; append-only loyalty/credit; limit-enforced atomic credit checkout; idempotent collections and balance/overdue query | Address UI, allocation/aging buckets, loyalty tiers/expiry jobs and offline policy controls remain |
-| 27 | Delivery and courier control | NOT STARTED | Delivery/custody schema only | Status service, payment events and settlement workflow required |
+| 27 | Delivery and courier control | IMPLEMENTED — UNVERIFIED | `0016_delivery_courier_operations.sql`; legal persisted state transitions; assigned-rider dispatch; exact idempotent payment collections; append-only courier cash settlements and collection allocations; trusted permission/device/audit boundaries | Rust CI execution, courier workspace, return/refund compensation, delivery sale-item/address snapshots and multi-terminal runtime exercise remain |
 | 28 | Sales channels/marketplace | NOT STARTED | Channel and settlement schema only | Pricing/accounting logic and reconciliation runtime required |
 | 29 | WhatsApp sidecar | NOT STARTED | Metadata boundary represented in schema/docs | Authenticated isolated sidecar and failure tests required |
 | 30 | Payment screenshot review | NOT STARTED | Evidence/review schema and non-settlement policy documented | OCR matcher and conservative review workflow required |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Compile and execute the expense workflow on CI, then implement delivery/courier cash custody through the same idempotency, audit and append-only financial-event boundaries.
+Compile and execute the delivery/courier workflow on CI, then implement attendance and operational alerts through the same tenant/device, idempotency and audit boundaries.

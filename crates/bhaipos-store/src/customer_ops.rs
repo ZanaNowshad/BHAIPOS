@@ -321,7 +321,7 @@ impl Store {
         })
     }
 
-    fn normalize_phone(input: &str) -> Result<String, StoreError> {
+    pub(super) fn normalize_phone(input: &str) -> Result<String, StoreError> {
         let trimmed = input.trim();
         let digits = trimmed
             .chars()

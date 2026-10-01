@@ -11,10 +11,10 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All fifteen SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 149 application tables created.
-- 174 integrity/security triggers created.
-- 93 `*_fils` financial columns use integer affinity.
+- All sixteen SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 154 application tables created.
+- 194 integrity/security triggers created.
+- 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
 - Audit mutation is rejected by immutable trigger.
@@ -67,6 +67,7 @@ Status vocabulary:
 - tenant-scoped customer creation with Bahrain phone normalization, append-only loyalty, credit limits, atomic customer-credit checkout and idempotent collection;
 - versioned recipes and idempotent production completion with once-only component consumption, weighted-average output cost and append-only movements;
 - idempotent expense category/expense creation, submit/approve/reject/pay transitions, immutable event/payment evidence and exact operating-profit arithmetic;
+- idempotent delivery creation and legal state transitions, assigned-rider dispatch, exact payment collection, and append-only courier cash settlement/allocation evidence;
 - partial refund limit/idempotency/stock compensation plus explicit tender reversal effects, duplicate-line rejection and historical receipt-scoped quoting;
 - paid-in/paid-out/safe-drop/no-sale cash movements and session-level expected cash;
 - cash-session close with counted cash, variance, X/Z/EOD report data, and variance-case creation;
@@ -84,7 +85,7 @@ Status vocabulary:
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace/cash settlement; digital order hub; marketplace settlement reconciliation; production planning/yield; employee/attendance; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; alerts; background jobs; feature flags; backups/restores; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; employee/attendance; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; alerts; background jobs; feature flags; backups/restores; diagnostics/update records.
 
 ## Runtime components still not implemented
 
@@ -96,7 +97,7 @@ Product/category scheduling; branch/channel pricing APIs; price/cost history com
 - Deployable branch hub process/network adapter and Reconciliation Centre UI remain incomplete; the authenticated envelope acceptance, enrollment, durable lease/backoff, lost-response replay, watermark and append-only resolution domain services are implemented but await Rust/multi-process execution.
 - Real multi-terminal conflict/failure testing.
 - Supplier purchasing and receiving command services.
-- Delivery/channel/attendance/alert command services and remaining loyalty/credit administration.
+- Channel/attendance/alert command services, delivery workspace/compensation, and remaining loyalty/credit administration.
 - WhatsApp Node.js sidecar and QR pairing.
 - OCR engine/provider integration and review UI.
 - AI provider adapters, tool registry, risk classifier, confirmation UX, compensating/undo executor and knowledge retrieval.

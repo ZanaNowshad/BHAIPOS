@@ -18,7 +18,7 @@ Implemented in source:
 - Fail-closed RBAC checks in checkout, refund, sale void, cash-session opening/closing, and cash movements.
 - EAN/PLU/weighted-barcode primitives and unknown-barcode capture.
 - SQLite schema for the complete retail operating model (121 tables).
-- Cross-tenant, financial-domain and immutable-ledger guards (93 triggers).
+- Cross-tenant, financial-domain and immutable-ledger guards (194 triggers).
 - Persistent carts and held-cart state.
 - Server-authoritative checkout recomputation.
 - Exact split-tender validation, cash tender/change, BenefitPay `RECORDED_NOT_SETTLED` evidence boundary.
