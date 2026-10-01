@@ -1247,7 +1247,7 @@ fn audit_chain_uses_hash_links_instead_of_timestamp_or_uuid_order() {
 
 #[test]
 fn audit_append_fails_closed_when_the_existing_chain_is_forked() {
-    let f = fixture();
+    let mut f = fixture();
     let now = t("2026-09-29T01:00:00Z");
     let tenant_id = f.tenant.to_string();
     let device_id = f.device.to_string();
