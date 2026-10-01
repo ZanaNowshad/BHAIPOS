@@ -202,7 +202,7 @@ assert 'manager_approval_consumptions' in rust_authoritative
 assert 'cash_session_report' in rust_authoritative
 assert 'CASH_SESSION_CLOSE' in rust_authoritative
 assert 'refund_payments' in rust_authoritative
-assert 'subtotal=subtotal.checked_add' in rust_authoritative
+assert re.search(r'subtotal\s*=\s*subtotal\.checked_add', rust_authoritative)
 assert 'audit chain topology is inconsistent' in rust_authoritative
 assert 'ORDER BY created_at DESC,id DESC' not in rust_authoritative
 assert 'bootstrap_local_business' in rust_authoritative and 'local_terminal_context' in rust_authoritative
@@ -231,7 +231,10 @@ registered_commands={name.strip() for name in registered.group(1).split(',') if 
 assert required_commands<=registered_commands, sorted(required_commands-registered_commands)
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
-assert 'pub const LATEST_SCHEMA:&str="0014_production_operations"' in rust_authoritative
+assert re.search(
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0014_production_operations"',
+    rust_authoritative,
+)
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
 for request_name,body in re.findall(r'struct\s+(\w*Request)\s*\{([^}]*)\}',desktop_bridge,re.S):
     forbidden=re.findall(r'\b(?:tenant_id|branch_id|device_id|user_id|actor_user_id)\s*:',body)

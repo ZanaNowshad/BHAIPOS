@@ -20,4 +20,6 @@ pub fn compute_audit_hash(material: &AuditMaterial<'_>) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String { hex::encode(Sha256::digest(bytes)) }
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
