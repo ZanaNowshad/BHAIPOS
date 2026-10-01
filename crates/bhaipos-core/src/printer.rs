@@ -62,7 +62,7 @@ pub fn render_esc_pos(
     if !snapshot.ends_with('\n') {
         bytes.push(b'\n');
     }
-    bytes.extend_from_slice(&[b'\n', b'\n', b'\n']);
+    bytes.extend_from_slice(b"\n\n\n");
     match profile.cut_mode {
         CutMode::None => {}
         CutMode::Partial => bytes.extend_from_slice(&[0x1d, 0x56, 0x01]),
