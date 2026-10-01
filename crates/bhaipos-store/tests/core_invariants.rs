@@ -3237,6 +3237,26 @@ fn expense_workflow_is_idempotent_append_evidenced_and_reports_exact_profit() {
     assert_eq!(paid, paid_replay);
     assert_eq!(paid.amount, Money(15_000));
     assert_eq!(paid.status, "PAID");
+    let sale_cart = cart_with_one(&f, now);
+    f.store
+        .checkout(CheckoutRequest {
+            tenant_id: f.tenant,
+            branch_id: f.branch,
+            device_id: f.device,
+            register_id: f.register,
+            user_id: f.user,
+            cart_id: sale_cart,
+            operation_id: OperationId::new(),
+            cash_session_id: Some(f.cash_session),
+            payments: vec![PaymentInput {
+                kind: TenderKind::Cash,
+                amount: Money(1100),
+                tendered: Some(Money(1100)),
+                reference: None,
+            }],
+            now,
+        })
+        .unwrap();
     assert!(f
         .store
         .connection()
@@ -3254,11 +3274,11 @@ fn expense_workflow_is_idempotent_append_evidenced_and_reports_exact_profit() {
             "2026-09-30T00:00:00Z",
         )
         .unwrap();
-    assert_eq!(report.net_sales, Money::ZERO);
-    assert_eq!(report.cogs, Money::ZERO);
-    assert_eq!(report.gross_profit, Money::ZERO);
+    assert_eq!(report.net_sales, Money(1_000));
+    assert_eq!(report.cogs, Money(700));
+    assert_eq!(report.gross_profit, Money(300));
     assert_eq!(report.operating_expenses, Money(15_000));
-    assert_eq!(report.operating_profit, Money(-15_000));
+    assert_eq!(report.operating_profit, Money(-14_700));
     assert_eq!(
         f.store
             .connection()
