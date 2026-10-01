@@ -19,16 +19,15 @@ impl Store {
         self.validate_local_session(context, user)?;
         let name = name.trim();
         if name.is_empty() {
-            return Err(StoreError::Validation("delivery worker name is required".into()));
+            return Err(StoreError::Validation(
+                "delivery worker name is required".into(),
+            ));
         }
         let phone = phone.map(Self::normalize_phone).transpose()?;
         let digest = sha256_hex(&serde_json::to_vec(&(worker_id, name, &phone))?);
-        if let Some(result) = self.load_delivery_operation(
-            context.tenant_id,
-            operation_id,
-            "WORKER_CREATE",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_delivery_operation(context.tenant_id, operation_id, "WORKER_CREATE", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -180,12 +179,9 @@ impl Store {
             ));
         }
         let digest = sha256_hex(&serde_json::to_vec(&(delivery_id, new_status, worker_id))?);
-        if let Some(result) = self.load_delivery_operation(
-            context.tenant_id,
-            operation_id,
-            "TRANSITION",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_delivery_operation(context.tenant_id, operation_id, "TRANSITION", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -219,7 +215,9 @@ impl Store {
                 | ("DISPATCHED", "RETURNED")
         );
         if !valid {
-            return Err(StoreError::Conflict("illegal delivery state transition".into()));
+            return Err(StoreError::Conflict(
+                "illegal delivery state transition".into(),
+            ));
         }
         Self::append_delivery_state_event(
             &tx,
@@ -248,8 +246,8 @@ impl Store {
                 params![delivery_id.to_string(), new_status],
             )?;
         }
-        let assigned_worker_id = worker_id
-            .or_else(|| assigned_worker.and_then(|value| Uuid::parse_str(&value).ok()));
+        let assigned_worker_id =
+            worker_id.or_else(|| assigned_worker.and_then(|value| Uuid::parse_str(&value).ok()));
         let result = DeliveryResult {
             delivery_id,
             status: new_status.into(),
@@ -293,8 +291,10 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<DeliveryCollectionResult, StoreError> {
         self.validate_local_session(context, user)?;
-        if !matches!(method, "CASH" | "CARD" | "BANK_TRANSFER" | "BENEFIT_PAY" | "OTHER")
-            || amount.0 <= 0
+        if !matches!(
+            method,
+            "CASH" | "CARD" | "BANK_TRANSFER" | "BENEFIT_PAY" | "OTHER"
+        ) || amount.0 <= 0
         {
             return Err(StoreError::Validation("invalid delivery collection".into()));
         }
@@ -305,12 +305,9 @@ impl Store {
             amount,
             reference,
         ))?);
-        if let Some(result) = self.load_delivery_operation(
-            context.tenant_id,
-            operation_id,
-            "COLLECT",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_delivery_operation(context.tenant_id, operation_id, "COLLECT", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -411,12 +408,9 @@ impl Store {
         }
         let note = note.map(str::trim).filter(|value| !value.is_empty());
         let digest = sha256_hex(&serde_json::to_vec(&(worker_id, returned_cash, note))?);
-        if let Some(result) = self.load_delivery_operation(
-            context.tenant_id,
-            operation_id,
-            "SETTLE_CASH",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_delivery_operation(context.tenant_id, operation_id, "SETTLE_CASH", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -434,13 +428,19 @@ impl Store {
                 "SELECT c.id,c.amount_fils FROM delivery_collections c WHERE c.tenant_id=?1 AND c.branch_id=?2 AND c.worker_id=?3 AND c.method='CASH' AND NOT EXISTS (SELECT 1 FROM delivery_cash_settlement_allocations a WHERE a.collection_id=c.id) ORDER BY c.collected_at,c.id",
             )?;
             let rows = statement.query_map(
-                params![context.tenant_id.to_string(), context.branch_id.to_string(), worker_id.to_string()],
+                params![
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    worker_id.to_string()
+                ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let expected = collections.iter().try_fold(0_i64, |total, (_, amount)| {
-            total.checked_add(*amount).ok_or(bhaipos_core::MoneyError::Overflow)
+            total
+                .checked_add(*amount)
+                .ok_or(bhaipos_core::MoneyError::Overflow)
         })?;
         if expected <= 0 {
             return Err(StoreError::Conflict("courier has no unsettled cash".into()));

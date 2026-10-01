@@ -14,10 +14,10 @@ use uuid::Uuid;
 
 #[path = "customer_ops.rs"]
 mod customer_ops;
-#[path = "expense_ops.rs"]
-mod expense_ops;
 #[path = "delivery_ops.rs"]
 mod delivery_ops;
+#[path = "expense_ops.rs"]
+mod expense_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
