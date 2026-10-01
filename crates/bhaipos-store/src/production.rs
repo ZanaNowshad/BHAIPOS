@@ -1,3 +1,8 @@
+#![allow(
+    clippy::too_many_arguments,
+    reason = "trusted production commands keep authority and inventory evidence explicit"
+)]
+
 use super::*;
 
 impl Store {

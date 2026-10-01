@@ -1,3 +1,8 @@
+#![allow(
+    clippy::too_many_arguments,
+    reason = "trusted domain commands keep authority, idempotency, and event time explicit"
+)]
+
 use super::*;
 
 impl Store {
@@ -326,8 +331,8 @@ impl Store {
             format!("+{digits}")
         } else if digits.len() == 8 {
             format!("+973{digits}")
-        } else if digits.starts_with("00") {
-            format!("+{}", &digits[2..])
+        } else if let Some(international) = digits.strip_prefix("00") {
+            format!("+{international}")
         } else {
             format!("+{digits}")
         };

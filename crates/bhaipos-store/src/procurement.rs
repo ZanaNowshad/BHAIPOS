@@ -1,3 +1,8 @@
+#![allow(
+    clippy::too_many_arguments,
+    reason = "trusted procurement commands keep authority and financial evidence explicit"
+)]
+
 use super::*;
 
 impl Store {

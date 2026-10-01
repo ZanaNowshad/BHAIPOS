@@ -595,6 +595,18 @@ pub struct Store {
     conn: Connection,
 }
 
+type BarcodeProductRow = (String, String, String, i64, i64, i32, i32, i32);
+type PrintJobRow = (
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+    Option<String>,
+    i32,
+);
+
 impl Store {
     pub fn in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
@@ -1353,6 +1365,10 @@ impl Store {
         self.conn.execute("INSERT INTO inventory_centres(id,tenant_id,branch_id,code,name,centre_type) VALUES(?1,?2,?3,?4,?5,'SHOP_FLOOR')",params![id.to_string(),tenant.to_string(),branch.to_string(),code,name])?;
         Ok(())
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "cash custody opening keeps every authoritative identity explicit"
+    )]
     pub fn open_cash_session(
         &self,
         id: Uuid,
@@ -1474,7 +1490,7 @@ impl Store {
             Some(_) => return Err(StoreError::Authorization("cart scope/status mismatch")),
             None => return Err(StoreError::NotFound("cart")),
         }
-        let row: Option<(String,String,String,i64,i64,i32,i32,i32)> = self.conn.query_row(
+        let row: Option<BarcodeProductRow> = self.conn.query_row(
             "SELECT p.id,p.name,p.sku,p.base_price_fils,p.current_cost_fils,p.tax_rate_bps,p.tax_inclusive,p.allow_decimal_qty FROM product_barcodes pb JOIN products p ON p.id=pb.product_id JOIN branch_assortments ba ON ba.product_id=p.id AND ba.tenant_id=p.tenant_id AND ba.branch_id=?2 WHERE pb.tenant_id=?1 AND pb.barcode=?3 AND p.status='ACTIVE' AND ba.sellable=1 LIMIT 1",
             params![tenant.to_string(),branch.to_string(),barcode],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
         let (pid, name, sku, base_price, cost, tax_bps, tax_incl, allow_decimal) = match row {
@@ -1708,21 +1724,20 @@ impl Store {
         if status != "ACTIVE" {
             return Err(StoreError::Conflict("cart is not active".into()));
         }
-        let mut stmt=tx.prepare("SELECT id,product_id,product_name_snapshot,sku_snapshot,barcode_snapshot,quantity_milli,unit_price_fils,unit_cost_fils,tax_category_snapshot,tax_rate_bps,tax_inclusive FROM cart_lines WHERE cart_id=?1 ORDER BY created_at,id")?;
+        let mut stmt=tx.prepare("SELECT product_id,product_name_snapshot,sku_snapshot,barcode_snapshot,quantity_milli,unit_price_fils,unit_cost_fils,tax_category_snapshot,tax_rate_bps,tax_inclusive FROM cart_lines WHERE cart_id=?1 ORDER BY created_at,id")?;
         let lines: Vec<CartLine> = stmt
             .query_map(params![req.cart_id.to_string()], |r| {
                 Ok(CartLine {
-                    id: r.get(0)?,
-                    product_id: r.get(1)?,
-                    name: r.get(2)?,
-                    sku: r.get(3)?,
-                    barcode: r.get(4)?,
-                    qty: r.get(5)?,
-                    price: r.get(6)?,
-                    cost: r.get(7)?,
-                    tax_category: r.get(8)?,
-                    tax_bps: r.get(9)?,
-                    tax_inclusive: r.get::<_, i32>(10)? != 0,
+                    product_id: r.get(0)?,
+                    name: r.get(1)?,
+                    sku: r.get(2)?,
+                    barcode: r.get(3)?,
+                    qty: r.get(4)?,
+                    price: r.get(5)?,
+                    cost: r.get(6)?,
+                    tax_category: r.get(7)?,
+                    tax_bps: r.get(8)?,
+                    tax_inclusive: r.get::<_, i32>(9)? != 0,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -2680,7 +2695,7 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::assert_active_device_tx(&tx, tenant, branch, device)?;
-        let row:Option<(String,Option<String>,String,Option<String>,Option<String>,i64,Option<String>,i32)>=tx.query_row("SELECT pj.id,pj.sale_id,pj.document_type,pj.snapshot_sha256,pj.printer_target,pj.attempts,rs.receipt_text,EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.sale_id=pj.sale_id AND sp.tender_kind='CASH') FROM print_jobs pj LEFT JOIN receipt_snapshots rs ON rs.sale_id=pj.sale_id WHERE pj.tenant_id=?1 AND pj.branch_id=?2 AND pj.device_id=?3 AND pj.state='PENDING' ORDER BY pj.created_at,pj.id LIMIT 1",params![tenant.to_string(),branch.to_string(),device.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
+        let row:Option<PrintJobRow>=tx.query_row("SELECT pj.id,pj.sale_id,pj.document_type,pj.snapshot_sha256,pj.printer_target,pj.attempts,rs.receipt_text,EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.sale_id=pj.sale_id AND sp.tender_kind='CASH') FROM print_jobs pj LEFT JOIN receipt_snapshots rs ON rs.sale_id=pj.sale_id WHERE pj.tenant_id=?1 AND pj.branch_id=?2 AND pj.device_id=?3 AND pj.state='PENDING' ORDER BY pj.created_at,pj.id LIMIT 1",params![tenant.to_string(),branch.to_string(),device.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
         let Some((
             id,
             sale_id,
@@ -2738,6 +2753,10 @@ impl Store {
         Ok(Some(lease))
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "print completion binds the lease to trusted terminal and error evidence"
+    )]
     pub fn finish_print_job(
         &mut self,
         tenant: TenantId,
@@ -3367,6 +3386,10 @@ impl Store {
         Ok(result)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "waste evidence keeps inventory authority and valuation inputs explicit"
+    )]
     pub fn record_waste(
         &mut self,
         context: LocalTerminalContext,
@@ -3657,6 +3680,10 @@ impl Store {
         })
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "transfer creation keeps both centres and trusted authority explicit"
+    )]
     pub fn create_inventory_transfer(
         &mut self,
         context: LocalTerminalContext,
@@ -4660,6 +4687,10 @@ impl Store {
             Err(StoreError::Authorization("product tenant mismatch"))
         }
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "ledger append receives complete immutable movement evidence"
+    )]
     fn append_inventory_effect(
         tx: &Transaction<'_>,
         context: LocalTerminalContext,
@@ -4934,6 +4965,10 @@ impl Store {
         }
         Ok(out)
     }
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "audit append receives complete tamper-evident event material"
+    )]
     fn append_audit(
         tx: &Transaction<'_>,
         tenant: TenantId,
@@ -4992,7 +5027,6 @@ impl Store {
 
 #[derive(Debug)]
 struct CartLine {
-    id: String,
     product_id: String,
     name: String,
     sku: String,
