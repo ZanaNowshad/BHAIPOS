@@ -316,12 +316,12 @@ impl Store {
         let branch = context.branch_id.to_string();
         let sales = Self::sum_money_query(
             &self.conn,
-            "SELECT total_fils FROM sales WHERE tenant_id=?1 AND branch_id=?2 AND status='COMPLETED' AND completed_at>=?3 AND completed_at<?4",
+            "SELECT subtotal_fils FROM sales WHERE tenant_id=?1 AND branch_id=?2 AND status='COMPLETED' AND completed_at>=?3 AND completed_at<?4",
             params![&tenant, &branch, from_utc, to_utc],
         )?;
         let refunds = Self::sum_money_query(
             &self.conn,
-            "SELECT total_fils FROM refunds WHERE tenant_id=?1 AND branch_id=?2 AND created_at>=?3 AND created_at<?4",
+            "SELECT subtotal_fils FROM refunds WHERE tenant_id=?1 AND branch_id=?2 AND created_at>=?3 AND created_at<?4",
             params![&tenant, &branch, from_utc, to_utc],
         )?;
         let sale_cogs = Self::sum_money_query(
