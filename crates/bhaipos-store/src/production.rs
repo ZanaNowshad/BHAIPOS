@@ -184,11 +184,10 @@ impl Store {
         }
         let expected_rows = {
             let mut statement = tx.prepare("SELECT component_product_id,quantity_milli FROM recipe_components WHERE recipe_id=?1")?;
-            statement
-                .query_map(params![recipe], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let rows = statement.query_map(params![recipe], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let expected_products = expected_rows
             .iter()

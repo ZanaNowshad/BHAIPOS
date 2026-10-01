@@ -1164,11 +1164,10 @@ impl Store {
         }
         let return_values = {
             let mut statement = tx.prepare("SELECT quantity_milli,unit_cost_fils FROM supplier_return_lines WHERE return_id=?1")?;
-            statement
-                .query_map(params![supplier_return_id.to_string()], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?
+            let rows = statement.query_map(params![supplier_return_id.to_string()], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut value = Money::ZERO;
         for (quantity, unit_cost) in return_values {
