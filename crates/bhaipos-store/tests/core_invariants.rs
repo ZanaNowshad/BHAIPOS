@@ -78,6 +78,10 @@ fn fixture() -> Fixture {
         ("expense.approve", "Approve or reject expenses"),
         ("expense.pay", "Pay approved expenses"),
         ("expense.report", "View operating profit reports"),
+        ("delivery.manage", "Create delivery orders and workers"),
+        ("delivery.dispatch", "Progress and dispatch deliveries"),
+        ("delivery.collect", "Record delivery collections"),
+        ("delivery.settle", "Settle courier cash custody"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -3289,5 +3293,226 @@ fn expense_workflow_is_idempotent_append_evidenced_and_reports_exact_profit() {
             )
             .unwrap(),
         4
+    );
+}
+
+#[test]
+fn delivery_collection_and_courier_cash_settlement_are_real_idempotent_financial_events() {
+    let mut f = fixture();
+    let now = t("2026-09-29T07:00:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let worker_id = Uuid::new_v4();
+    f.store
+        .create_delivery_worker(
+            context,
+            f.user,
+            OperationId::new(),
+            worker_id,
+            "Rider One",
+            Some("39000001"),
+            now,
+        )
+        .unwrap();
+    let delivery_id = Uuid::new_v4();
+    let create_operation = OperationId::new();
+    let created = f
+        .store
+        .create_delivery_order(
+            context,
+            f.user,
+            create_operation,
+            delivery_id,
+            None,
+            None,
+            Some("39000002"),
+            Money(5_000),
+            Some("Cash on delivery"),
+            now,
+        )
+        .unwrap();
+    let replay = f
+        .store
+        .create_delivery_order(
+            context,
+            f.user,
+            create_operation,
+            delivery_id,
+            None,
+            None,
+            Some("39000002"),
+            Money(5_000),
+            Some("Cash on delivery"),
+            now,
+        )
+        .unwrap();
+    assert_eq!(created, replay);
+    assert_eq!(created.status, "PENDING");
+    assert!(matches!(
+        f.store.create_delivery_order(
+            context,
+            f.user,
+            create_operation,
+            delivery_id,
+            None,
+            None,
+            Some("39000002"),
+            Money(5_001),
+            Some("Cash on delivery"),
+            now,
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    assert!(matches!(
+        f.store.transition_delivery(
+            context,
+            f.user,
+            OperationId::new(),
+            delivery_id,
+            "DELIVERED",
+            None,
+            now,
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    for status in ["PREPARING", "READY"] {
+        f.store
+            .transition_delivery(
+                context,
+                f.user,
+                OperationId::new(),
+                delivery_id,
+                status,
+                None,
+                now,
+            )
+            .unwrap();
+    }
+    f.store
+        .transition_delivery(
+            context,
+            f.user,
+            OperationId::new(),
+            delivery_id,
+            "DISPATCHED",
+            Some(worker_id),
+            now,
+        )
+        .unwrap();
+    let collection_operation = OperationId::new();
+    let collection = f
+        .store
+        .collect_delivery_payment(
+            context,
+            f.user,
+            collection_operation,
+            delivery_id,
+            "CASH",
+            Money(5_000),
+            None,
+            now,
+        )
+        .unwrap();
+    let collection_replay = f
+        .store
+        .collect_delivery_payment(
+            context,
+            f.user,
+            collection_operation,
+            delivery_id,
+            "CASH",
+            Money(5_000),
+            None,
+            now,
+        )
+        .unwrap();
+    assert_eq!(collection, collection_replay);
+    assert_eq!(collection.payment_state, "PAID");
+    assert!(matches!(
+        f.store.collect_delivery_payment(
+            context,
+            f.user,
+            OperationId::new(),
+            delivery_id,
+            "CASH",
+            Money(5_000),
+            None,
+            now,
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    f.store
+        .transition_delivery(
+            context,
+            f.user,
+            OperationId::new(),
+            delivery_id,
+            "DELIVERED",
+            None,
+            now,
+        )
+        .unwrap();
+    let settlement_operation = OperationId::new();
+    let settlement = f
+        .store
+        .settle_courier_cash(
+            context,
+            f.user,
+            settlement_operation,
+            worker_id,
+            Money(4_900),
+            Some("100 fils shortage acknowledged"),
+            now,
+        )
+        .unwrap();
+    let settlement_replay = f
+        .store
+        .settle_courier_cash(
+            context,
+            f.user,
+            settlement_operation,
+            worker_id,
+            Money(4_900),
+            Some("100 fils shortage acknowledged"),
+            now,
+        )
+        .unwrap();
+    assert_eq!(settlement, settlement_replay);
+    assert_eq!(settlement.expected_cash, Money(5_000));
+    assert_eq!(settlement.returned_cash, Money(4_900));
+    assert_eq!(settlement.variance, Money(-100));
+    assert_eq!(settlement.status, "DISCREPANCY");
+    assert!(matches!(
+        f.store.settle_courier_cash(
+            context,
+            f.user,
+            settlement_operation,
+            worker_id,
+            Money(5_000),
+            None,
+            now,
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    assert_eq!(
+        f.store
+            .open_courier_cash(context, f.user, worker_id)
+            .unwrap(),
+        Money::ZERO
+    );
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM delivery_collections WHERE delivery_id=?1",
+                params![delivery_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
     );
 }

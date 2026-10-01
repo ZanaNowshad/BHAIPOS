@@ -17,6 +17,7 @@ UPGRADE_0012=ROOT/'migrations/0012_procurement_supplier_finance.sql'
 UPGRADE_0013=ROOT/'migrations/0013_customer_store_operations.sql'
 UPGRADE_0014=ROOT/'migrations/0014_production_operations.sql'
 UPGRADE_0015=ROOT/'migrations/0015_expense_operations.sql'
+UPGRADE_0016=ROOT/'migrations/0016_delivery_courier_operations.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -50,6 +51,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0013.read_text())
         con.executescript(UPGRADE_0014.read_text())
         con.executescript(UPGRADE_0015.read_text())
+        con.executescript(UPGRADE_0016.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -96,7 +98,8 @@ critical={
     'device_enrollment_grants','device_enrollment_consumptions','inventory_cost_balances','inventory_movement_lots',
     'inventory_operation_results','inventory_reconciliation_runs','inventory_transfer_receipts','inventory_transfer_receipt_lines','stocktake_count_events','stocktake_approvals',
     'procurement_operation_results','purchase_order_events','supplier_invoice_events','supplier_return_events','store_operation_results','customer_credit_payment_allocations','production_events',
-    'expense_operation_results','expense_events','expense_payments'
+    'expense_operation_results','expense_events','expense_payments',
+    'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -158,6 +161,29 @@ con.execute("update expenses set status='SUBMITTED' where id=?",(expense,))
 must_fail(lambda: con.execute("update expenses set amount_fils=1 where id=?",(expense,)), 'IMMUTABLE')
 must_fail(lambda: con.execute("insert into expense_events(id,tenant_id,expense_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),tb,expense,'APPROVED',uid(),device,user,'{}',now)))
 must_fail(lambda: con.execute("insert into expense_payments(id,tenant_id,branch_id,expense_id,operation_id,device_id,user_id,method,amount_fils,paid_at) values(?,?,?,?,?,?,?,?,?,?)",(uid(),ta,ba,expense,uid(),device,user,'BANK_TRANSFER',14999,now)), 'INVALID_EXPENSE_PAYMENT')
+
+# Delivery state, collection and courier custody are exact-fils, append-only,
+# device-scoped evidence. Settlement allocates collections instead of mutating them.
+worker,delivery=uid(),uid()
+con.execute("insert into delivery_workers(id,tenant_id,name,phone_e164,branch_id,active) values(?,?,?,?,?,1)",(worker,ta,'Rider','+97339000001',ba))
+con.execute("insert into delivery_orders(id,tenant_id,branch_id,phone_e164,amount_due_fils,payment_state,status,created_at) values(?,?,?,?,?,'DUE','PENDING',?)",(delivery,ta,ba,'+97339000002',5000,now))
+con.execute("insert into delivery_state_events(id,tenant_id,delivery_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),ta,delivery,'CREATED',uid(),device,user,'{}',now))
+must_fail(lambda: con.execute("update delivery_orders set status='DELIVERED' where id=?",(delivery,)), 'INVALID_DELIVERY_TRANSITION')
+for old_status,new_status in [('PENDING','PREPARING'),('PREPARING','READY')]:
+    assert con.execute("select status from delivery_orders where id=?",(delivery,)).fetchone()[0]==old_status
+    con.execute("insert into delivery_state_events(id,tenant_id,delivery_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),ta,delivery,new_status,uid(),device,user,'{}',now))
+    con.execute("update delivery_orders set status=? where id=?",(new_status,delivery))
+con.execute("insert into delivery_state_events(id,tenant_id,delivery_id,event_type,operation_id,device_id,user_id,worker_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?,?)",(uid(),ta,delivery,'DISPATCHED',uid(),device,user,worker,'{}',now))
+con.execute("update delivery_orders set assigned_worker_id=?,status='DISPATCHED',dispatched_at=? where id=?",(worker,now,delivery))
+must_fail(lambda: con.execute("insert into delivery_collections(id,tenant_id,branch_id,delivery_id,worker_id,operation_id,device_id,user_id,method,amount_fils,collected_at) values(?,?,?,?,?,?,?,?,?,?,?)",(uid(),ta,ba,delivery,worker,uid(),device,user,'CASH',4999,now)), 'INVALID_DELIVERY_COLLECTION')
+collection=uid()
+con.execute("insert into delivery_collections(id,tenant_id,branch_id,delivery_id,worker_id,operation_id,device_id,user_id,method,amount_fils,collected_at) values(?,?,?,?,?,?,?,?,?,?,?)",(collection,ta,ba,delivery,worker,uid(),device,user,'CASH',5000,now))
+con.execute("update delivery_orders set payment_state='PAID' where id=?",(delivery,))
+must_fail(lambda: con.execute("update delivery_collections set amount_fils=1 where id=?",(collection,)), 'IMMUTABLE')
+settlement=uid()
+con.execute("insert into delivery_cash_settlements(id,tenant_id,branch_id,worker_id,operation_id,device_id,user_id,expected_cash_fils,returned_cash_fils,variance_fils,status,note,settled_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",(settlement,ta,ba,worker,uid(),device,user,5000,4900,-100,'DISCREPANCY','short',now))
+con.execute("insert into delivery_cash_settlement_allocations(settlement_id,collection_id,tenant_id,amount_fils) values(?,?,?,?)",(settlement,collection,ta,5000))
+must_fail(lambda: con.execute("delete from delivery_cash_settlement_allocations where collection_id=?",(collection,)), 'IMMUTABLE')
 
 audit=uid(); con.execute("insert into audit_events(id,tenant_id,device_id,actor_user_id,event_type,entity_type,entity_id,payload_json,previous_hash,event_hash,created_at) values(?,?,?,?,?,?,?,?,?,?,?)",(audit,ta,device,user,'TEST','x','1','{}','','abc',now))
 must_fail(lambda: con.execute("update audit_events set payload_json='tampered' where id=?",(audit,)), 'IMMUTABLE')
@@ -249,7 +275,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0015_expense_operations"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0016_delivery_courier_operations"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -294,6 +320,9 @@ for symbol in ['create_recipe','create_production_order','complete_production']:
 expense_ops=(ROOT/'crates/bhaipos-store/src/expense_ops.rs').read_text()
 for symbol in ['create_expense_category','create_expense','submit_expense','decide_expense','pay_expense','operating_profit_report']:
     assert symbol in expense_ops, symbol
+delivery_ops=(ROOT/'crates/bhaipos-store/src/delivery_ops.rs').read_text()
+for symbol in ['create_delivery_worker','create_delivery_order','transition_delivery','collect_delivery_payment','open_courier_cash','settle_courier_cash']:
+    assert symbol in delivery_ops, symbol
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
@@ -317,5 +346,6 @@ result={
     'audit_chain_topology_policy': 'ok',
     'local_terminal_binding': 'ok',
     'expense_state_and_evidence_guards': 'ok',
+    'delivery_state_collection_and_cash_custody_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))

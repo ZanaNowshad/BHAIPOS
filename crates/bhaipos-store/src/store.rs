@@ -16,6 +16,8 @@ use uuid::Uuid;
 mod customer_ops;
 #[path = "expense_ops.rs"]
 mod expense_ops;
+#[path = "delivery_ops.rs"]
+mod delivery_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
@@ -39,7 +41,9 @@ const MIGRATION_0012: &str =
 const MIGRATION_0013: &str = include_str!("../../../migrations/0013_customer_store_operations.sql");
 const MIGRATION_0014: &str = include_str!("../../../migrations/0014_production_operations.sql");
 const MIGRATION_0015: &str = include_str!("../../../migrations/0015_expense_operations.sql");
-pub const LATEST_SCHEMA: &str = "0015_expense_operations";
+const MIGRATION_0016: &str =
+    include_str!("../../../migrations/0016_delivery_courier_operations.sql");
+pub const LATEST_SCHEMA: &str = "0016_delivery_courier_operations";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -536,6 +540,34 @@ pub struct OperatingProfitReport {
     pub operating_profit: Money,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryResult {
+    pub delivery_id: Uuid,
+    pub status: String,
+    pub payment_state: String,
+    pub amount_due: Money,
+    pub assigned_worker_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryCollectionResult {
+    pub collection_id: Uuid,
+    pub delivery_id: Uuid,
+    pub payment_state: String,
+    pub method: String,
+    pub amount: Money,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CourierCashSettlementResult {
+    pub settlement_id: Uuid,
+    pub worker_id: Uuid,
+    pub expected_cash: Money,
+    pub returned_cash: Money,
+    pub variance: Money,
+    pub status: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct VoidSaleRequest {
     pub tenant_id: TenantId,
@@ -683,6 +715,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0013)?;
         self.conn.execute_batch(MIGRATION_0014)?;
         self.conn.execute_batch(MIGRATION_0015)?;
+        self.conn.execute_batch(MIGRATION_0016)?;
         Ok(())
     }
     fn ensure_column(
@@ -840,6 +873,10 @@ impl Store {
             ("expense.approve", "Approve or reject expenses"),
             ("expense.pay", "Pay approved expenses"),
             ("expense.report", "View operating profit reports"),
+            ("delivery.manage", "Create delivery orders and workers"),
+            ("delivery.dispatch", "Progress and dispatch delivery orders"),
+            ("delivery.collect", "Record delivery payment collections"),
+            ("delivery.settle", "Reconcile courier cash custody"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
