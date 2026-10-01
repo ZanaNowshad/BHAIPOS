@@ -1,9 +1,9 @@
 use bhaipos_core::{
-    compute_audit_hash, hash_pin, hash_secret, price_times_quantity, sha256_hex, sign_sync_mutation,
-    verify_approval, verify_pin, verify_secret, verify_sync_mutation, ApprovalBinding,
-    AuditMaterial, BranchId, CartId, DeviceId, Money, OperationId, ProductId, QuantityMilli,
-    RegisterId, SaleId, SyncMutationEnvelope, SyncMutationMaterial, TaxCategory, TaxRule, TenantId,
-    TenderKind, UserId,
+    compute_audit_hash, hash_pin, hash_secret, price_times_quantity, sha256_hex,
+    sign_sync_mutation, verify_approval, verify_pin, verify_secret, verify_sync_mutation,
+    ApprovalBinding, AuditMaterial, BranchId, CartId, DeviceId, Money, OperationId, ProductId,
+    QuantityMilli, RegisterId, SaleId, SyncMutationEnvelope, SyncMutationMaterial, TaxCategory,
+    TaxRule, TenantId, TenderKind, UserId,
 };
 use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
@@ -2934,26 +2934,25 @@ impl Store {
         tx.execute("DELETE FROM sync_delivery_leases WHERE mutation_id IN (SELECT id FROM sync_queue WHERE tenant_id=?1 AND device_id=?2 AND state='RETRYING')",params![context.tenant_id.to_string(),context.device_id.to_string()])?;
         let raw = {
             let mut statement=tx.prepare("SELECT sq.id,sq.operation_id,sq.entity_type,sq.entity_id,sq.mutation_type,sq.payload_json FROM sync_queue sq LEFT JOIN sync_retry_schedule srs ON srs.mutation_id=sq.id WHERE sq.tenant_id=?1 AND sq.branch_id=?2 AND sq.device_id=?3 AND sq.state IN ('PENDING','RETRYING') AND (srs.next_attempt_at IS NULL OR srs.next_attempt_at<=?4) ORDER BY sq.created_at,sq.id LIMIT ?5")?;
-            let rows = statement
-                .query_map(
-                    params![
-                        context.tenant_id.to_string(),
-                        context.branch_id.to_string(),
-                        context.device_id.to_string(),
-                        now.to_rfc3339(),
-                        limit as i64
-                    ],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, String>(4)?,
-                            row.get::<_, String>(5)?,
-                        ))
-                    },
-                )?;
+            let rows = statement.query_map(
+                params![
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    context.device_id.to_string(),
+                    now.to_rfc3339(),
+                    limit as i64
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut envelopes = Vec::with_capacity(raw.len());
@@ -3577,18 +3576,17 @@ impl Store {
         )?;
         let movements = {
             let mut statement=tx.prepare("SELECT centre_id,product_id,quantity_milli,unit_cost_fils FROM inventory_movements WHERE tenant_id=?1 AND branch_id=?2 ORDER BY created_at,id")?;
-            let rows = statement
-                .query_map(
-                    params![context.tenant_id.to_string(), context.branch_id.to_string()],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, i64>(2)?,
-                            row.get::<_, i64>(3)?,
-                        ))
-                    },
-                )?;
+            let rows = statement.query_map(
+                params![context.tenant_id.to_string(), context.branch_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut ledger: HashMap<(String, String), (i64, Money)> = HashMap::new();
@@ -3614,11 +3612,10 @@ impl Store {
             let mut statement = tx.prepare(
                 "SELECT centre_id,product_id FROM stock_levels WHERE tenant_id=?1 AND branch_id=?2",
             )?;
-            let rows = statement
-                .query_map(
-                    params![context.tenant_id.to_string(), context.branch_id.to_string()],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )?;
+            let rows = statement.query_map(
+                params![context.tenant_id.to_string(), context.branch_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         for key in cached_keys {
@@ -3788,15 +3785,14 @@ impl Store {
             .map_err(|_| StoreError::Validation("invalid transfer centre".into()))?;
         let lines = {
             let mut statement=tx.prepare("SELECT id,product_id,lot_id,requested_qty_milli FROM inventory_transfer_lines WHERE transfer_id=?1")?;
-            let rows = statement
-                .query_map(params![transfer_id.to_string()], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, i64>(3)?,
-                    ))
-                })?;
+            let rows = statement.query_map(params![transfer_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         for (line, product, lot, quantity) in lines {
@@ -4145,15 +4141,14 @@ impl Store {
             .map_err(|_| StoreError::Validation("invalid stocktake centre".into()))?;
         let lines = {
             let mut statement=tx.prepare("SELECT id,product_id,expected_qty_milli,counted_qty_milli FROM stocktake_lines WHERE stocktake_id=?1")?;
-            let rows = statement
-                .query_map(params![stocktake_id.to_string()], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, Option<i64>>(3)?,
-                    ))
-                })?;
+            let rows = statement.query_map(params![stocktake_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut adjustments = 0_i64;
