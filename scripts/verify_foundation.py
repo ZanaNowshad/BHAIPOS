@@ -16,6 +16,7 @@ UPGRADE_0011=ROOT/'migrations/0011_inventory_operations.sql'
 UPGRADE_0012=ROOT/'migrations/0012_procurement_supplier_finance.sql'
 UPGRADE_0013=ROOT/'migrations/0013_customer_store_operations.sql'
 UPGRADE_0014=ROOT/'migrations/0014_production_operations.sql'
+UPGRADE_0015=ROOT/'migrations/0015_expense_operations.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -48,6 +49,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0012.read_text())
         con.executescript(UPGRADE_0013.read_text())
         con.executescript(UPGRADE_0014.read_text())
+        con.executescript(UPGRADE_0015.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -93,7 +95,8 @@ critical={
     'sync_delivery_leases','hub_mutations','device_sync_checkpoints','sync_conflict_resolutions','sync_delivery_errors','sync_retry_schedule',
     'device_enrollment_grants','device_enrollment_consumptions','inventory_cost_balances','inventory_movement_lots',
     'inventory_operation_results','inventory_reconciliation_runs','inventory_transfer_receipts','inventory_transfer_receipt_lines','stocktake_count_events','stocktake_approvals',
-    'procurement_operation_results','purchase_order_events','supplier_invoice_events','supplier_return_events','store_operation_results','customer_credit_payment_allocations','production_events'
+    'procurement_operation_results','purchase_order_events','supplier_invoice_events','supplier_return_events','store_operation_results','customer_credit_payment_allocations','production_events',
+    'expense_operation_results','expense_events','expense_payments'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -141,6 +144,19 @@ con.execute("insert into product_barcodes(tenant_id,barcode,product_id,created_a
 # Same literal barcode can exist in another tenant without collision.
 product_b=uid(); con.execute("insert into products(id,tenant_id,sku,name,base_price_fils,current_cost_fils,created_at) values(?,?,?,?,?,?,?)",(product_b,tb,'S1','PB',1000,700,now)); con.execute("insert into product_barcodes(tenant_id,barcode,product_id,created_at) values(?,?,?,?)",(tb,'123',product_b,now))
 assert con.execute("select count(*) from product_barcodes where barcode='123'").fetchone()[0]==2
+
+# Expense evidence is exact-fils, state-bound, immutable and tenant/device scoped.
+expense_category,expense,expense_operation=uid(),uid(),uid()
+con.execute("insert into expense_categories(id,tenant_id,name,active) values(?,?,?,1)",(expense_category,ta,'Utilities'))
+con.execute("insert into expenses(id,tenant_id,branch_id,category_id,status,description,amount_fils,tax_fils,incurred_on,created_by_user_id,created_at) values(?,?,?,?,?,?,?,?,?,?,?)",(expense,ta,ba,expense_category,'DRAFT','Electricity',15000,1364,'2026-09-29',user,now))
+con.execute("insert into expense_events(id,tenant_id,expense_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),ta,expense,'CREATED',expense_operation,device,user,'{}',now))
+must_fail(lambda: con.execute("update expenses set status='APPROVED' where id=?",(expense,)), 'INVALID_EXPENSE_TRANSITION')
+submit_operation=uid()
+con.execute("insert into expense_events(id,tenant_id,expense_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),ta,expense,'SUBMITTED',submit_operation,device,user,'{}',now))
+con.execute("update expenses set status='SUBMITTED' where id=?",(expense,))
+must_fail(lambda: con.execute("update expenses set amount_fils=1 where id=?",(expense,)), 'IMMUTABLE')
+must_fail(lambda: con.execute("insert into expense_events(id,tenant_id,expense_id,event_type,operation_id,device_id,user_id,evidence_json,created_at) values(?,?,?,?,?,?,?,?,?)",(uid(),tb,expense,'APPROVED',uid(),device,user,'{}',now)), 'TENANT_SCOPE_VIOLATION')
+must_fail(lambda: con.execute("insert into expense_payments(id,tenant_id,branch_id,expense_id,operation_id,device_id,user_id,method,amount_fils,paid_at) values(?,?,?,?,?,?,?,?,?,?)",(uid(),ta,ba,expense,uid(),device,user,'BANK_TRANSFER',14999,now)), 'INVALID_EXPENSE_PAYMENT')
 
 audit=uid(); con.execute("insert into audit_events(id,tenant_id,device_id,actor_user_id,event_type,entity_type,entity_id,payload_json,previous_hash,event_hash,created_at) values(?,?,?,?,?,?,?,?,?,?,?)",(audit,ta,device,user,'TEST','x','1','{}','','abc',now))
 must_fail(lambda: con.execute("update audit_events set payload_json='tampered' where id=?",(audit,)), 'IMMUTABLE')
@@ -232,7 +248,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0014_production_operations"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0015_expense_operations"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -274,6 +290,9 @@ assert 'customer_credit_ledger' in rust_authoritative and 'customer credit limit
 production=(ROOT/'crates/bhaipos-store/src/production.rs').read_text()
 for symbol in ['create_recipe','create_production_order','complete_production']:
     assert symbol in production, symbol
+expense_ops=(ROOT/'crates/bhaipos-store/src/expense_ops.rs').read_text()
+for symbol in ['create_expense_category','create_expense','submit_expense','decide_expense','pay_expense','operating_profit_report']:
+    assert symbol in expense_ops, symbol
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
@@ -296,5 +315,6 @@ result={
     'financial_domain_guards': 'ok',
     'audit_chain_topology_policy': 'ok',
     'local_terminal_binding': 'ok',
+    'expense_state_and_evidence_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))

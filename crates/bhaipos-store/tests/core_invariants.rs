@@ -74,6 +74,10 @@ fn fixture() -> Fixture {
         ("customer.credit.collect", "Collect credit"),
         ("customer.credit.view", "View credit"),
         ("production.manage", "Manage production"),
+        ("expense.manage", "Create and submit expenses"),
+        ("expense.approve", "Approve or reject expenses"),
+        ("expense.pay", "Pay approved expenses"),
+        ("expense.report", "View operating profit reports"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -3133,5 +3137,137 @@ fn production_completion_is_idempotent_and_consumes_components_once() {
     assert_eq!(
         f.store.stock_quantity(f.tenant, f.branch, output).unwrap(),
         1_000
+    );
+}
+
+#[test]
+fn expense_workflow_is_idempotent_append_evidenced_and_reports_exact_profit() {
+    let mut f = fixture();
+    let now = t("2026-09-29T06:00:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let category = Uuid::new_v4();
+    f.store
+        .create_expense_category(
+            context,
+            f.user,
+            OperationId::new(),
+            category,
+            "Utilities",
+            now,
+        )
+        .unwrap();
+    let expense_id = Uuid::new_v4();
+    let create_operation = OperationId::new();
+    let created = f
+        .store
+        .create_expense(
+            context,
+            f.user,
+            create_operation,
+            expense_id,
+            category,
+            "Electricity bill",
+            Money(15_000),
+            Money(1_364),
+            "2026-09-29",
+            now,
+        )
+        .unwrap();
+    let replay = f
+        .store
+        .create_expense(
+            context,
+            f.user,
+            create_operation,
+            expense_id,
+            category,
+            "Electricity bill",
+            Money(15_000),
+            Money(1_364),
+            "2026-09-29",
+            now,
+        )
+        .unwrap();
+    assert_eq!(created, replay);
+    assert_eq!(created.status, "DRAFT");
+    f.store
+        .submit_expense(context, f.user, OperationId::new(), expense_id, now)
+        .unwrap();
+    f.store
+        .decide_expense(
+            context,
+            f.user,
+            OperationId::new(),
+            expense_id,
+            true,
+            Some("Within monthly budget"),
+            now,
+        )
+        .unwrap();
+    let payment_operation = OperationId::new();
+    let paid = f
+        .store
+        .pay_expense(
+            context,
+            f.user,
+            payment_operation,
+            expense_id,
+            "BANK_TRANSFER",
+            Some("BANK-EXP-1"),
+            now,
+        )
+        .unwrap();
+    let paid_replay = f
+        .store
+        .pay_expense(
+            context,
+            f.user,
+            payment_operation,
+            expense_id,
+            "BANK_TRANSFER",
+            Some("BANK-EXP-1"),
+            now,
+        )
+        .unwrap();
+    assert_eq!(paid, paid_replay);
+    assert_eq!(paid.amount, Money(15_000));
+    assert_eq!(paid.status, "PAID");
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "UPDATE expenses SET amount_fils=1 WHERE id=?1",
+            params![expense_id.to_string()],
+        )
+        .is_err());
+    let report = f
+        .store
+        .operating_profit_report(
+            context,
+            f.user,
+            "2026-09-29T00:00:00Z",
+            "2026-09-30T00:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(report.net_sales, Money::ZERO);
+    assert_eq!(report.cogs, Money::ZERO);
+    assert_eq!(report.gross_profit, Money::ZERO);
+    assert_eq!(report.operating_expenses, Money(15_000));
+    assert_eq!(report.operating_profit, Money(-15_000));
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM expense_events WHERE expense_id=?1",
+                params![expense_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
     );
 }
