@@ -1,7 +1,7 @@
 # BHAIPOS Requirement Coverage Matrix
 
-Assessment date: 2026-09-30
-Authority baseline: implementation commit `a50dc26` plus Task 7 customer-ledger working tree
+Assessment date: 2026-10-01
+Authority baseline: public implementation commit `f2afd9b` plus Task 7 expense-operations working tree
 Working branch: `codex/idempotency-payload-binding-20260929`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
@@ -41,7 +41,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 22 | Suppliers and purchasing | IMPLEMENTED — UNVERIFIED | `0012_procurement_supplier_finance.sql`; supplier terms; idempotent requisitions/POs; approval/order transitions; partial receipt with quantity, damage and cost discrepancy evidence | Cargo execution, admin UI, approval thresholds and reliability analytics remain |
 | 23 | Supplier finance | IMPLEMENTED — UNVERIFIED | Exact invoice posting; payment allocation; append-only supplier ledger/statement; stock-backed return credit/replacement flow | Cargo execution, attachments, aging UI and richer credit-note reconciliation remain |
 | 24 | OCR purchase entry | NOT STARTED | OCR proposal/review storage exists | Isolated provider, evidence storage and human approval UI required |
-| 25 | Expenses and operating profit | NOT STARTED | Expense schema only | Workflow, approvals and reproducible profit report definitions required |
+| 25 | Expenses and operating profit | IMPLEMENTED — UNVERIFIED | `0015_expense_operations.sql`; exact-fils draft/submit/approve/reject/pay workflow; immutable event/payment evidence; payload-bound retries; trusted operating-profit report where net sales are tax-exclusive sale subtotals less tax-exclusive refund subtotals, then `gross profit = net sales - COGS` and `operating profit = gross profit - paid operating expenses` | Rust CI execution, attachments, approval thresholds, admin UI and cash-basis/accrual reporting options remain |
 | 26 | Customers, loyalty and credit | IN PROGRESS | `0013_customer_store_operations.sql`; canonical Bahrain phone handling; append-only loyalty/credit; limit-enforced atomic credit checkout; idempotent collections and balance/overdue query | Address UI, allocation/aging buckets, loyalty tiers/expiry jobs and offline policy controls remain |
 | 27 | Delivery and courier control | NOT STARTED | Delivery/custody schema only | Status service, payment events and settlement workflow required |
 | 28 | Sales channels/marketplace | NOT STARTED | Channel and settlement schema only | Pricing/accounting logic and reconciliation runtime required |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Compile and execute the Rust workspace on CI, including inventory and procurement recovery tests, then implement customer/store operations through the same idempotency, audit and append-only ledger boundaries.
+Compile and execute the expense workflow on CI, then implement delivery/courier cash custody through the same idempotency, audit and append-only financial-event boundaries.

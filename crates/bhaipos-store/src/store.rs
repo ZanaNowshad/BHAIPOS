@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 #[path = "customer_ops.rs"]
 mod customer_ops;
+#[path = "expense_ops.rs"]
+mod expense_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
@@ -36,7 +38,8 @@ const MIGRATION_0012: &str =
     include_str!("../../../migrations/0012_procurement_supplier_finance.sql");
 const MIGRATION_0013: &str = include_str!("../../../migrations/0013_customer_store_operations.sql");
 const MIGRATION_0014: &str = include_str!("../../../migrations/0014_production_operations.sql");
-pub const LATEST_SCHEMA: &str = "0014_production_operations";
+const MIGRATION_0015: &str = include_str!("../../../migrations/0015_expense_operations.sql");
+pub const LATEST_SCHEMA: &str = "0015_expense_operations";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -508,6 +511,31 @@ pub struct ProductionResult {
     pub output_cost: Money,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpenseResult {
+    pub expense_id: Uuid,
+    pub status: String,
+    pub amount: Money,
+    pub tax: Money,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpensePaymentResult {
+    pub payment_id: Uuid,
+    pub expense_id: Uuid,
+    pub status: String,
+    pub amount: Money,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatingProfitReport {
+    pub net_sales: Money,
+    pub cogs: Money,
+    pub gross_profit: Money,
+    pub operating_expenses: Money,
+    pub operating_profit: Money,
+}
+
 #[derive(Clone, Debug)]
 pub struct VoidSaleRequest {
     pub tenant_id: TenantId,
@@ -654,6 +682,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0012)?;
         self.conn.execute_batch(MIGRATION_0013)?;
         self.conn.execute_batch(MIGRATION_0014)?;
+        self.conn.execute_batch(MIGRATION_0015)?;
         Ok(())
     }
     fn ensure_column(
@@ -807,6 +836,10 @@ impl Store {
             ),
             ("customer.credit.view", "View customer credit statements"),
             ("production.manage", "Create and complete production orders"),
+            ("expense.manage", "Create and submit expenses"),
+            ("expense.approve", "Approve or reject expenses"),
+            ("expense.pay", "Pay approved expenses"),
+            ("expense.report", "View operating profit reports"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
