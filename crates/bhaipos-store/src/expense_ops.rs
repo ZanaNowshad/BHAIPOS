@@ -100,12 +100,9 @@ impl Store {
             tax,
             incurred_on.trim(),
         ))?);
-        if let Some(result) = self.load_expense_operation(
-            context.tenant_id,
-            operation_id,
-            "CREATE",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_expense_operation(context.tenant_id, operation_id, "CREATE", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -339,8 +336,10 @@ impl Store {
         })?;
         for row in rows {
             let (unit_cost, quantity) = row?;
-            refunded_cogs = refunded_cogs
-                .checked_add(price_times_quantity(Money(unit_cost), QuantityMilli(quantity))?)?;
+            refunded_cogs = refunded_cogs.checked_add(price_times_quantity(
+                Money(unit_cost),
+                QuantityMilli(quantity),
+            )?)?;
         }
         let operating_expenses = Self::sum_money_query(
             &self.conn,
@@ -384,13 +383,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(
-            &tx,
-            context.tenant_id,
-            context.branch_id,
-            user,
-            permission,
-        )?;
+        Self::assert_permission(&tx, context.tenant_id, context.branch_id, user, permission)?;
         let values: (i64, i64) = tx
             .query_row(
                 "SELECT amount_fils,tax_fils FROM expenses WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status=?4",
