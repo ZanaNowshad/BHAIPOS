@@ -39,12 +39,9 @@ impl Store {
             hire_date,
             context.branch_id,
         ))?);
-        if let Some(result) = self.load_employee_operation(
-            context.tenant_id,
-            operation_id,
-            "CREATE",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_employee_operation(context.tenant_id, operation_id, "CREATE", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -125,12 +122,9 @@ impl Store {
             occurred_at,
             note,
         ))?);
-        if let Some(result) = self.load_attendance_operation(
-            context.tenant_id,
-            operation_id,
-            "EVENT",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_attendance_operation(context.tenant_id, operation_id, "EVENT", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -168,7 +162,9 @@ impl Store {
                 )
                 .optional()?;
             if active.is_some() {
-                return Err(StoreError::Conflict("employee is already clocked in".into()));
+                return Err(StoreError::Conflict(
+                    "employee is already clocked in".into(),
+                ));
             }
             let session_id = Uuid::new_v4();
             tx.execute(
@@ -204,9 +200,12 @@ impl Store {
                 )
                 .optional()?;
             let (session, previous_state, clocked_in, break_started, mut break_seconds) = row
-                .ok_or_else(|| StoreError::Conflict("employee has no active attendance session".into()))?;
-            let session_id = Uuid::parse_str(&session)
-                .map_err(|_| StoreError::Validation("invalid attendance session identity".into()))?;
+                .ok_or_else(|| {
+                    StoreError::Conflict("employee has no active attendance session".into())
+                })?;
+            let session_id = Uuid::parse_str(&session).map_err(|_| {
+                StoreError::Validation("invalid attendance session identity".into())
+            })?;
             let last_at: String = tx.query_row(
                 "SELECT occurred_at FROM attendance_session_events WHERE session_id=?1 ORDER BY occurred_at DESC,id DESC LIMIT 1",
                 params![&session],
@@ -227,7 +226,9 @@ impl Store {
                 ("CLOCKED_IN" | "ON_BREAK", "MISSING_CLOCK_OUT") => "MISSING_CLOCK_OUT",
                 _ => return Err(StoreError::Conflict("illegal attendance transition".into())),
             };
-            if previous_state == "ON_BREAK" && matches!(event_type, "BREAK_END" | "CLOCK_OUT" | "MISSING_CLOCK_OUT") {
+            if previous_state == "ON_BREAK"
+                && matches!(event_type, "BREAK_END" | "CLOCK_OUT" | "MISSING_CLOCK_OUT")
+            {
                 let started = break_started
                     .as_deref()
                     .ok_or_else(|| StoreError::Conflict("active break has no start time".into()))?;
@@ -247,7 +248,9 @@ impl Store {
                     .checked_sub(break_seconds)
                     .ok_or(bhaipos_core::MoneyError::Overflow)?;
                 if worked < 0 {
-                    return Err(StoreError::Conflict("attendance duration is negative".into()));
+                    return Err(StoreError::Conflict(
+                        "attendance duration is negative".into(),
+                    ));
                 }
                 Some(worked)
             } else {
@@ -330,7 +333,9 @@ impl Store {
             "attendance.view",
         )?;
         if from_utc.trim().is_empty() || to_utc.trim().is_empty() || from_utc >= to_utc {
-            return Err(StoreError::Validation("invalid attendance report range".into()));
+            return Err(StoreError::Validation(
+                "invalid attendance report range".into(),
+            ));
         }
         let (completed, worked, breaks, missing) = self.conn.query_row(
             "SELECT COUNT(*),COALESCE(SUM(worked_seconds),0),COALESCE(SUM(break_seconds),0),COALESCE(SUM(CASE WHEN state='MISSING_CLOCK_OUT' THEN 1 ELSE 0 END),0) FROM attendance_sessions WHERE tenant_id=?1 AND branch_id=?2 AND employee_id=?3 AND state IN ('CLOCKED_OUT','MISSING_CLOCK_OUT') AND clocked_in_at>=?4 AND clocked_in_at<?5",
@@ -347,10 +352,17 @@ impl Store {
     }
 
     fn append_attendance_event(
-        tx: &Transaction<'_>, context: LocalTerminalContext, user: UserId,
-        operation_id: OperationId, session_id: Uuid, employee_id: Uuid,
-        event_type: &str, previous_state: Option<&str>, new_state: &str,
-        occurred_at: DateTime<Utc>, note: Option<&str>,
+        tx: &Transaction<'_>,
+        context: LocalTerminalContext,
+        user: UserId,
+        operation_id: OperationId,
+        session_id: Uuid,
+        employee_id: Uuid,
+        event_type: &str,
+        previous_state: Option<&str>,
+        new_state: &str,
+        occurred_at: DateTime<Utc>,
+        note: Option<&str>,
     ) -> Result<(), StoreError> {
         tx.execute(
             "INSERT INTO attendance_session_events(id,tenant_id,session_id,employee_id,branch_id,operation_id,event_type,previous_state,new_state,occurred_at,device_id,entered_by_user_id,note,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?10)",
@@ -359,27 +371,91 @@ impl Store {
         Ok(())
     }
 
-    fn load_employee_operation<T: DeserializeOwned>(&self, tenant: TenantId, operation_id: OperationId, action: &str, digest: &str) -> Result<Option<T>, StoreError> {
-        Self::load_scoped_operation(&self.conn, "employee_operation_results", tenant, operation_id, action, digest)
+    fn load_employee_operation<T: DeserializeOwned>(
+        &self,
+        tenant: TenantId,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+    ) -> Result<Option<T>, StoreError> {
+        Self::load_scoped_operation(
+            &self.conn,
+            "employee_operation_results",
+            tenant,
+            operation_id,
+            action,
+            digest,
+        )
     }
 
-    fn load_attendance_operation<T: DeserializeOwned>(&self, tenant: TenantId, operation_id: OperationId, action: &str, digest: &str) -> Result<Option<T>, StoreError> {
-        Self::load_scoped_operation(&self.conn, "attendance_operation_results", tenant, operation_id, action, digest)
+    fn load_attendance_operation<T: DeserializeOwned>(
+        &self,
+        tenant: TenantId,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+    ) -> Result<Option<T>, StoreError> {
+        Self::load_scoped_operation(
+            &self.conn,
+            "attendance_operation_results",
+            tenant,
+            operation_id,
+            action,
+            digest,
+        )
     }
 
-    fn load_scoped_operation<T: DeserializeOwned>(conn: &Connection, table: &str, tenant: TenantId, operation_id: OperationId, action: &str, digest: &str) -> Result<Option<T>, StoreError> {
+    fn load_scoped_operation<T: DeserializeOwned>(
+        conn: &Connection,
+        table: &str,
+        tenant: TenantId,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+    ) -> Result<Option<T>, StoreError> {
         let sql = format!("SELECT action,request_sha256,result_json FROM {table} WHERE tenant_id=?1 AND operation_id=?2");
-        let stored: Option<(String,String,String)> = conn.query_row(&sql, params![tenant.to_string(), operation_id.to_string()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
+        let stored: Option<(String, String, String)> = conn
+            .query_row(
+                &sql,
+                params![tenant.to_string(), operation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
         match stored {
             None => Ok(None),
-            Some((stored_action, stored_digest, json)) if stored_action==action && stored_digest==digest => Ok(Some(serde_json::from_str(&json)?)),
-            Some(_) => Err(StoreError::Conflict("operation ID reused with different action or payload".into())),
+            Some((stored_action, stored_digest, json))
+                if stored_action == action && stored_digest == digest =>
+            {
+                Ok(Some(serde_json::from_str(&json)?))
+            }
+            Some(_) => Err(StoreError::Conflict(
+                "operation ID reused with different action or payload".into(),
+            )),
         }
     }
 
-    fn record_scoped_operation<T: Serialize>(tx: &Transaction<'_>, table: &str, tenant: TenantId, operation_id: OperationId, action: &str, digest: &str, result: &T, now: DateTime<Utc>) -> Result<(), StoreError> {
+    fn record_scoped_operation<T: Serialize>(
+        tx: &Transaction<'_>,
+        table: &str,
+        tenant: TenantId,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+        result: &T,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
         let sql = format!("INSERT INTO {table}(tenant_id,operation_id,action,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5,?6)");
-        tx.execute(&sql, params![tenant.to_string(), operation_id.to_string(), action, digest, serde_json::to_string(result)?, now.to_rfc3339()])?;
+        tx.execute(
+            &sql,
+            params![
+                tenant.to_string(),
+                operation_id.to_string(),
+                action,
+                digest,
+                serde_json::to_string(result)?,
+                now.to_rfc3339()
+            ],
+        )?;
         Ok(())
     }
 }
