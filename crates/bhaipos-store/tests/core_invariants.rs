@@ -82,6 +82,10 @@ fn fixture() -> Fixture {
         ("delivery.dispatch", "Progress and dispatch deliveries"),
         ("delivery.collect", "Record delivery collections"),
         ("delivery.settle", "Settle courier cash custody"),
+        ("employee.manage", "Manage employee records"),
+        ("attendance.clock", "Record attendance events"),
+        ("attendance.manage", "Resolve attendance exceptions"),
+        ("attendance.view", "View attendance reports"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -3514,5 +3518,145 @@ fn delivery_collection_and_courier_cash_settlement_are_real_idempotent_financial
             )
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn attendance_events_are_idempotent_state_bound_and_calculate_exact_worked_time() {
+    let mut f = fixture();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let employee_id = Uuid::new_v4();
+    let create_operation = OperationId::new();
+    let employee = f
+        .store
+        .create_employee(
+            context,
+            f.user,
+            create_operation,
+            employee_id,
+            "EMP-100",
+            "Store Assistant",
+            Some("Shelf Staff"),
+            Some("39000003"),
+            Some("2026-09-01"),
+            t("2026-09-29T05:59:00Z"),
+        )
+        .unwrap();
+    assert_eq!(
+        employee,
+        f.store
+            .create_employee(
+                context,
+                f.user,
+                create_operation,
+                employee_id,
+                "EMP-100",
+                "Store Assistant",
+                Some("Shelf Staff"),
+                Some("39000003"),
+                Some("2026-09-01"),
+                t("2026-09-29T05:59:00Z"),
+            )
+            .unwrap()
+    );
+    let clock_in_operation = OperationId::new();
+    let clocked_in = f
+        .store
+        .record_attendance_event(
+            context,
+            f.user,
+            clock_in_operation,
+            employee_id,
+            "CLOCK_IN",
+            t("2026-09-29T06:00:00Z"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(clocked_in.state, "CLOCKED_IN");
+    assert_eq!(
+        clocked_in,
+        f.store
+            .record_attendance_event(
+                context,
+                f.user,
+                clock_in_operation,
+                employee_id,
+                "CLOCK_IN",
+                t("2026-09-29T06:00:00Z"),
+                None,
+            )
+            .unwrap()
+    );
+    assert!(matches!(
+        f.store.record_attendance_event(
+            context,
+            f.user,
+            OperationId::new(),
+            employee_id,
+            "CLOCK_OUT",
+            t("2026-09-29T05:59:59Z"),
+            None,
+        ),
+        Err(StoreError::Conflict(_)) | Err(StoreError::Validation(_))
+    ));
+    for (event_type, occurred_at) in [
+        ("BREAK_START", "2026-09-29T08:00:00Z"),
+        ("BREAK_END", "2026-09-29T08:30:00Z"),
+    ] {
+        f.store
+            .record_attendance_event(
+                context,
+                f.user,
+                OperationId::new(),
+                employee_id,
+                event_type,
+                t(occurred_at),
+                None,
+            )
+            .unwrap();
+    }
+    let closed = f
+        .store
+        .record_attendance_event(
+            context,
+            f.user,
+            OperationId::new(),
+            employee_id,
+            "CLOCK_OUT",
+            t("2026-09-29T11:00:00Z"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(closed.state, "CLOCKED_OUT");
+    assert_eq!(closed.break_seconds, 1_800);
+    assert_eq!(closed.worked_seconds, Some(16_200));
+    let report = f
+        .store
+        .attendance_report(
+            context,
+            f.user,
+            employee_id,
+            "2026-09-29T00:00:00Z",
+            "2026-09-30T00:00:00Z",
+        )
+        .unwrap();
+    assert_eq!(report.completed_sessions, 1);
+    assert_eq!(report.worked_seconds, 16_200);
+    assert_eq!(report.break_seconds, 1_800);
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM attendance_session_events WHERE session_id=?1",
+                params![closed.session_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
     );
 }

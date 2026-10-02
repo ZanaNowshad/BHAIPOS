@@ -58,7 +58,7 @@ Test-first gate: idempotent receiving/payment, exact balances, partial receipt, 
 
 ## Task 7 — Customer and store operations
 
-Status: **IN PROGRESS**. Implemented slices cover tenant-scoped customers, Bahrain phone normalization, append-only loyalty, credit accounts/payments/balances, atomic customer-credit checkout, idempotent production completion, exact-fils expense approval/payment with reproducible operating-profit reporting, and delivery/courier collection plus cash-custody settlement. Attendance, marketplace settlement and alerts remain.
+Status: **IN PROGRESS**. Implemented slices cover tenant-scoped customers, Bahrain phone normalization, append-only loyalty, credit accounts/payments/balances, atomic customer-credit checkout, idempotent production completion, exact-fils expense approval/payment with reproducible operating-profit reporting, delivery/courier collection plus cash-custody settlement, and append-only attendance clock/break sessions with exact worked-time reporting. Marketplace settlement, attendance scheduling UI and alerts remain.
 
 Implement loyalty, credit, delivery/courier custody, expenses, channels/settlements, BOM/production, attendance and alerts through the same authority/audit model.
 
