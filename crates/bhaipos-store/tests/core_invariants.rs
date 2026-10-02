@@ -3741,8 +3741,18 @@ fn operational_alerts_are_idempotent_state_bound_and_append_evidenced() {
     ));
     for (status, assignee, note, at) in [
         ("ACKNOWLEDGED", Some(f.user), None, "2026-09-29T12:02:00Z"),
-        ("IN_PROGRESS", Some(f.user), Some("Investigating terminal logs"), "2026-09-29T12:03:00Z"),
-        ("RESOLVED", Some(f.user), Some("Credential rotated and terminal verified"), "2026-09-29T12:04:00Z"),
+        (
+            "IN_PROGRESS",
+            Some(f.user),
+            Some("Investigating terminal logs"),
+            "2026-09-29T12:03:00Z",
+        ),
+        (
+            "RESOLVED",
+            Some(f.user),
+            Some("Credential rotated and terminal verified"),
+            "2026-09-29T12:04:00Z",
+        ),
     ] {
         f.store
             .transition_operational_alert(

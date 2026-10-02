@@ -12,10 +12,10 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
-#[path = "attendance_ops.rs"]
-mod attendance_ops;
 #[path = "alert_ops.rs"]
 mod alert_ops;
+#[path = "attendance_ops.rs"]
+mod attendance_ops;
 #[path = "customer_ops.rs"]
 mod customer_ops;
 #[path = "delivery_ops.rs"]

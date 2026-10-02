@@ -70,24 +70,64 @@ impl Store {
             &details_json,
             context.branch_id,
         ))?);
-        if let Some(result) = self.load_alert_operation(operation_id, "CREATE", &digest, context.tenant_id)? {
+        if let Some(result) =
+            self.load_alert_operation(operation_id, "CREATE", &digest, context.tenant_id)?
+        {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx, context.tenant_id, context.branch_id, user, "alert.create")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "alert.create",
+        )?;
         tx.execute(
             "INSERT INTO operational_alerts(id,tenant_id,branch_id,severity,alert_type,status,entity_type,entity_id,title,details_json,created_at) VALUES(?1,?2,?3,?4,?5,'NEW',?6,?7,?8,?9,?10)",
             params![alert_id.to_string(), context.tenant_id.to_string(), context.branch_id.to_string(), severity, alert_type, entity_type, entity_id, title, details_json, now.to_rfc3339()],
         )?;
-        Self::append_operational_alert_event(&tx, context, user, operation_id, alert_id, "CREATED", None, "NEW", None, None, now)?;
+        Self::append_operational_alert_event(
+            &tx,
+            context,
+            user,
+            operation_id,
+            alert_id,
+            "CREATED",
+            None,
+            "NEW",
+            None,
+            None,
+            now,
+        )?;
         let result = OperationalAlertResult {
             alert_id,
             status: "NEW".into(),
             severity: severity.into(),
             assigned_user_id: None,
         };
-        Self::record_alert_operation(&tx, context.tenant_id, operation_id, "CREATE", &digest, &result, now)?;
-        Self::append_audit(&tx, context.tenant_id, context.device_id, user, "OPERATIONAL_ALERT_CREATED", "operational_alert", &alert_id.to_string(), &serde_json::to_string(&result)?, now)?;
+        Self::record_alert_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "CREATE",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "OPERATIONAL_ALERT_CREATED",
+            "operational_alert",
+            &alert_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -104,19 +144,39 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<OperationalAlertResult, StoreError> {
         self.validate_local_session(context, user)?;
-        if !matches!(new_status, "ACKNOWLEDGED" | "IN_PROGRESS" | "RESOLVED" | "DISMISSED") {
+        if !matches!(
+            new_status,
+            "ACKNOWLEDGED" | "IN_PROGRESS" | "RESOLVED" | "DISMISSED"
+        ) {
             return Err(StoreError::Validation("invalid alert status".into()));
         }
         let note = note.map(str::trim).filter(|value| !value.is_empty());
         if matches!(new_status, "RESOLVED" | "DISMISSED") && note.is_none() {
-            return Err(StoreError::Validation("closing an alert requires a note".into()));
+            return Err(StoreError::Validation(
+                "closing an alert requires a note".into(),
+            ));
         }
-        let digest = sha256_hex(&serde_json::to_vec(&(alert_id, new_status, assigned_user_id, note))?);
-        if let Some(result) = self.load_alert_operation(operation_id, "TRANSITION", &digest, context.tenant_id)? {
+        let digest = sha256_hex(&serde_json::to_vec(&(
+            alert_id,
+            new_status,
+            assigned_user_id,
+            note,
+        ))?);
+        if let Some(result) =
+            self.load_alert_operation(operation_id, "TRANSITION", &digest, context.tenant_id)?
+        {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx, context.tenant_id, context.branch_id, user, "alert.manage")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "alert.manage",
+        )?;
         let (previous_status, severity, current_assignee): (String, String, Option<String>) = tx
             .query_row(
                 "SELECT status,severity,assigned_user_id FROM operational_alerts WHERE id=?1 AND tenant_id=?2 AND branch_id=?3",
@@ -143,15 +203,50 @@ impl Store {
                 .and_then(|value| Uuid::parse_str(&value).ok())
                 .map(UserId)
         });
-        Self::append_operational_alert_event(&tx, context, user, operation_id, alert_id, new_status, Some(&previous_status), new_status, assigned_user_id, note, now)?;
+        Self::append_operational_alert_event(
+            &tx,
+            context,
+            user,
+            operation_id,
+            alert_id,
+            new_status,
+            Some(&previous_status),
+            new_status,
+            assigned_user_id,
+            note,
+            now,
+        )?;
         let resolved_at = matches!(new_status, "RESOLVED" | "DISMISSED").then(|| now.to_rfc3339());
         tx.execute(
             "UPDATE operational_alerts SET status=?1,assigned_user_id=?2,resolved_at=?3 WHERE id=?4 AND tenant_id=?5 AND branch_id=?6",
             params![new_status, assigned_user_id.map(|value| value.to_string()), resolved_at, alert_id.to_string(), context.tenant_id.to_string(), context.branch_id.to_string()],
         )?;
-        let result = OperationalAlertResult { alert_id, status: new_status.into(), severity, assigned_user_id };
-        Self::record_alert_operation(&tx, context.tenant_id, operation_id, "TRANSITION", &digest, &result, now)?;
-        Self::append_audit(&tx, context.tenant_id, context.device_id, user, "OPERATIONAL_ALERT_TRANSITIONED", "operational_alert", &alert_id.to_string(), &serde_json::to_string(&result)?, now)?;
+        let result = OperationalAlertResult {
+            alert_id,
+            status: new_status.into(),
+            severity,
+            assigned_user_id,
+        };
+        Self::record_alert_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "TRANSITION",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "OPERATIONAL_ALERT_TRANSITIONED",
+            "operational_alert",
+            &alert_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -163,34 +258,70 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<OperationalAlertSummary>, StoreError> {
         self.validate_local_session(context, user)?;
-        Self::assert_permission_conn(&self.conn, context.tenant_id, context.branch_id, user, "alert.view")?;
+        Self::assert_permission_conn(
+            &self.conn,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "alert.view",
+        )?;
         let limit = limit.clamp(1, 500) as i64;
         let mut statement = self.conn.prepare(
             "SELECT id,severity,alert_type,status,title,assigned_user_id,created_at FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND status NOT IN ('RESOLVED','DISMISSED') ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,created_at,id LIMIT ?3",
         )?;
         let rows = statement
-            .query_map(params![context.tenant_id.to_string(), context.branch_id.to_string(), limit], |row| {
-                let id: String = row.get(0)?;
-                let assignee: Option<String> = row.get(5)?;
-                Ok((id, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, assignee, row.get(6)?))
-            })?
+            .query_map(
+                params![
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    limit
+                ],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let assignee: Option<String> = row.get(5)?;
+                    Ok((
+                        id,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        assignee,
+                        row.get(6)?,
+                    ))
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(id, severity, alert_type, status, title, assignee, created_at)| {
-                Ok(OperationalAlertSummary {
-                    alert_id: Uuid::parse_str(&id).map_err(|_| StoreError::Validation("invalid alert identity".into()))?,
-                    severity,
-                    alert_type,
-                    status,
-                    title,
-                    assigned_user_id: assignee.map(|value| Uuid::parse_str(&value).map(UserId).map_err(|_| StoreError::Validation("invalid alert assignee".into()))).transpose()?,
-                    created_at,
-                })
-            })
+            .map(
+                |(id, severity, alert_type, status, title, assignee, created_at)| {
+                    Ok(OperationalAlertSummary {
+                        alert_id: Uuid::parse_str(&id)
+                            .map_err(|_| StoreError::Validation("invalid alert identity".into()))?,
+                        severity,
+                        alert_type,
+                        status,
+                        title,
+                        assigned_user_id: assignee
+                            .map(|value| {
+                                Uuid::parse_str(&value).map(UserId).map_err(|_| {
+                                    StoreError::Validation("invalid alert assignee".into())
+                                })
+                            })
+                            .transpose()?,
+                        created_at,
+                    })
+                },
+            )
             .collect()
     }
 
-    fn load_alert_operation<T: DeserializeOwned>(&self, operation_id: OperationId, action: &str, digest: &str, tenant: TenantId) -> Result<Option<T>, StoreError> {
+    fn load_alert_operation<T: DeserializeOwned>(
+        &self,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+        tenant: TenantId,
+    ) -> Result<Option<T>, StoreError> {
         let stored: Option<(String, String, String)> = self.conn.query_row(
             "SELECT action,request_sha256,result_json FROM alert_operation_results WHERE tenant_id=?1 AND operation_id=?2",
             params![tenant.to_string(), operation_id.to_string()],
@@ -198,12 +329,26 @@ impl Store {
         ).optional()?;
         match stored {
             None => Ok(None),
-            Some((stored_action, stored_digest, json)) if stored_action == action && stored_digest == digest => Ok(Some(serde_json::from_str(&json)?)),
-            Some(_) => Err(StoreError::Conflict("operation ID reused with different action or payload".into())),
+            Some((stored_action, stored_digest, json))
+                if stored_action == action && stored_digest == digest =>
+            {
+                Ok(Some(serde_json::from_str(&json)?))
+            }
+            Some(_) => Err(StoreError::Conflict(
+                "operation ID reused with different action or payload".into(),
+            )),
         }
     }
 
-    fn record_alert_operation<T: Serialize>(tx: &Transaction<'_>, tenant: TenantId, operation_id: OperationId, action: &str, digest: &str, result: &T, now: DateTime<Utc>) -> Result<(), StoreError> {
+    fn record_alert_operation<T: Serialize>(
+        tx: &Transaction<'_>,
+        tenant: TenantId,
+        operation_id: OperationId,
+        action: &str,
+        digest: &str,
+        result: &T,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
         tx.execute(
             "INSERT INTO alert_operation_results(tenant_id,operation_id,action,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5,?6)",
             params![tenant.to_string(), operation_id.to_string(), action, digest, serde_json::to_string(result)?, now.to_rfc3339()],
