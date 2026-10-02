@@ -86,6 +86,9 @@ fn fixture() -> Fixture {
         ("attendance.clock", "Record attendance events"),
         ("attendance.manage", "Resolve attendance exceptions"),
         ("attendance.view", "View attendance reports"),
+        ("alert.create", "Create operational alerts"),
+        ("alert.manage", "Assign and transition operational alerts"),
+        ("alert.view", "View operational alerts"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -3654,6 +3657,130 @@ fn attendance_events_are_idempotent_state_bound_and_calculate_exact_worked_time(
             .query_row(
                 "SELECT COUNT(*) FROM attendance_session_events WHERE session_id=?1",
                 params![closed.session_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
+    );
+}
+
+#[test]
+fn operational_alerts_are_idempotent_state_bound_and_append_evidenced() {
+    let mut f = fixture();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let alert_id = Uuid::new_v4();
+    let create_operation = OperationId::new();
+    let created = f
+        .store
+        .create_operational_alert(
+            context,
+            f.user,
+            create_operation,
+            alert_id,
+            "CRITICAL",
+            "SECURITY_EVENT",
+            "Repeated terminal authentication failures",
+            Some("device"),
+            Some(&f.device.to_string()),
+            r#"{"failures":5}"#,
+            t("2026-09-29T12:00:00Z"),
+        )
+        .unwrap();
+    assert_eq!(created.status, "NEW");
+    assert_eq!(
+        created,
+        f.store
+            .create_operational_alert(
+                context,
+                f.user,
+                create_operation,
+                alert_id,
+                "CRITICAL",
+                "SECURITY_EVENT",
+                "Repeated terminal authentication failures",
+                Some("device"),
+                Some(&f.device.to_string()),
+                r#"{"failures":5}"#,
+                t("2026-09-29T12:00:00Z"),
+            )
+            .unwrap()
+    );
+    assert!(matches!(
+        f.store.create_operational_alert(
+            context,
+            f.user,
+            create_operation,
+            alert_id,
+            "HIGH",
+            "SECURITY_EVENT",
+            "Changed replay",
+            None,
+            None,
+            "{}",
+            t("2026-09-29T12:00:00Z"),
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    assert!(matches!(
+        f.store.transition_operational_alert(
+            context,
+            f.user,
+            OperationId::new(),
+            alert_id,
+            "RESOLVED",
+            None,
+            Some("Cannot skip investigation"),
+            t("2026-09-29T12:01:00Z"),
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    for (status, assignee, note, at) in [
+        ("ACKNOWLEDGED", Some(f.user), None, "2026-09-29T12:02:00Z"),
+        ("IN_PROGRESS", Some(f.user), Some("Investigating terminal logs"), "2026-09-29T12:03:00Z"),
+        ("RESOLVED", Some(f.user), Some("Credential rotated and terminal verified"), "2026-09-29T12:04:00Z"),
+    ] {
+        f.store
+            .transition_operational_alert(
+                context,
+                f.user,
+                OperationId::new(),
+                alert_id,
+                status,
+                assignee,
+                note,
+                t(at),
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        f.store.transition_operational_alert(
+            context,
+            f.user,
+            OperationId::new(),
+            alert_id,
+            "DISMISSED",
+            None,
+            Some("too late"),
+            t("2026-09-29T12:05:00Z"),
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+    assert!(f
+        .store
+        .active_operational_alerts(context, f.user, 50)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM operational_alert_events WHERE alert_id=?1",
+                params![alert_id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
             .unwrap(),

@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 #[path = "attendance_ops.rs"]
 mod attendance_ops;
+#[path = "alert_ops.rs"]
+mod alert_ops;
 #[path = "customer_ops.rs"]
 mod customer_ops;
 #[path = "delivery_ops.rs"]
@@ -46,7 +48,8 @@ const MIGRATION_0015: &str = include_str!("../../../migrations/0015_expense_oper
 const MIGRATION_0016: &str =
     include_str!("../../../migrations/0016_delivery_courier_operations.sql");
 const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_operations.sql");
-pub const LATEST_SCHEMA: &str = "0017_attendance_operations";
+const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_alerts.sql");
+pub const LATEST_SCHEMA: &str = "0018_operational_alerts";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -597,6 +600,25 @@ pub struct AttendanceReport {
     pub missing_clock_out_sessions: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalAlertResult {
+    pub alert_id: Uuid,
+    pub status: String,
+    pub severity: String,
+    pub assigned_user_id: Option<UserId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalAlertSummary {
+    pub alert_id: Uuid,
+    pub severity: String,
+    pub alert_type: String,
+    pub status: String,
+    pub title: String,
+    pub assigned_user_id: Option<UserId>,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct VoidSaleRequest {
     pub tenant_id: TenantId,
@@ -746,6 +768,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0015)?;
         self.conn.execute_batch(MIGRATION_0016)?;
         self.conn.execute_batch(MIGRATION_0017)?;
+        self.conn.execute_batch(MIGRATION_0018)?;
         Ok(())
     }
     fn ensure_column(
@@ -911,6 +934,9 @@ impl Store {
             ("attendance.clock", "Record employee clock and break events"),
             ("attendance.manage", "Resolve attendance exceptions"),
             ("attendance.view", "View attendance reports"),
+            ("alert.create", "Create operational alerts"),
+            ("alert.manage", "Assign and transition operational alerts"),
+            ("alert.view", "View operational alerts"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),

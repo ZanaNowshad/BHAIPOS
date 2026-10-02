@@ -1,15 +1,15 @@
 # BHAIPOS Requirement Coverage Matrix
 
-Assessment date: 2026-10-01
-Authority baseline: public implementation commit `f2afd9b` plus Task 7 expense-operations working tree
-Working branch: `codex/idempotency-payload-binding-20260929`
+Assessment date: 2026-10-02
+Authority baseline: public `main` commit `9d1d15d700c1235874929636a3eaabedecddb23a` plus the operational-alert change under review
+Working branch: `codex/operational-alerts-20261002`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
 | ID | Requirement | Status | Implementation / evidence | Known limitation / next gate |
 |---|---|---|---|---|
 | 01 | Production retail OS objective | IN PROGRESS | `README.md`, `docs/ARCHITECTURE.md`; integrated foundation for commerce, cash, stock, identity, audit, print and sync intent | Most back-office services and end-to-end desktop workflows remain incomplete |
-| 02 | Repository-first operating rules | VERIFIED | Clean two-commit source baseline inspected; `docs/IMPLEMENTATION_STATUS.md` records implemented and missing runtime surfaces | Rust/Windows execution still needs capable runners |
+| 02 | Repository-first operating rules | VERIFIED | Public `main` and the clean operational-alert branch were inspected; `docs/IMPLEMENTATION_STATUS.md` records implemented and missing runtime surfaces | Windows execution still needs a capable runner |
 | 03.1 | Integer-fils money | IMPLEMENTED — UNVERIFIED | `bhaipos-core::Money`; checked aggregation/change/variance; `price_times_quantity`; `0006_financial_domain_guards.sql`; Python dynamic-type rejection passes | Rust invariant suite cannot run in this container |
 | 03.2 | Tenant isolation | IMPLEMENTED — UNVERIFIED | Authoritative scope checks plus DB guards in `0003_integrity_guards.sql`; Python cross-tenant checks pass | Guard every schema-ready table before exposing its write API |
 | 03.3 | Branch/device/user context | IMPLEMENTED — UNVERIFIED | `0007_local_terminal_binding.sql`; authenticated desktop state injects authority; protected commands revalidate binding/device/user | Cargo execution and full UI runtime exercise remain blocked locally |
@@ -19,7 +19,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 03.7 | Atomic checkout | IMPLEMENTED — UNVERIFIED | `BEGIN IMMEDIATE` sale, lines, tenders, stock, receipt, print, audit, sync and idempotency transaction | Desktop end-to-end crash/lost-response test not run |
 | 03.8 | Append-only inventory | IMPLEMENTED — UNVERIFIED | `0011_inventory_operations.sql`; immutable movement/lot evidence; stock and cost projections; permissioned ledger rebuild with repair evidence | Cargo execution and broader production/BOM movement coverage remain |
 | 03.9 | Fail-closed authorization | IMPLEMENTED — UNVERIFIED | Permission allow-list checks and denial test | Full command surface is not yet implemented |
-| 03.10 | Tamper-evident audit | IMPLEMENTED — UNVERIFIED | Per-device SHA-256 link topology, immutable triggers, tamper/fork/order regressions and fail-closed append | Rust execution plus operational verification UI/alert are missing |
+| 03.10 | Tamper-evident audit | IMPLEMENTED — UNVERIFIED | Per-device SHA-256 link topology, immutable triggers, tamper/fork/order regressions and fail-closed append | Operational verification UI and automatic alert producer remain missing |
 | 04 | Offline authority and policy | IN PROGRESS | Local SQLite authority, atomic bootstrap, offline Argon2 PIN login and local commands exist | Policy versions, bounded offline windows, broader stale-state controls and reconciliation are missing |
 | 05 | Trusted terminal model | IMPLEMENTED — UNVERIFIED | Durable identity/binding, expiring one-use enrollment, Windows Credential Manager secret custody, versioned permissioned rotation, suspend/revoke and attribution | Rust/Windows execution, heartbeat service and remote enrollment UX missing |
 | 06 | Action-bound manager approval | IMPLEMENTED — UNVERIFIED | HMAC binding, expiry and nonce consumption; void consumes exact approval | Production key custody and broader sensitive-action integration missing |
@@ -50,7 +50,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 31 | Production and waste | IMPLEMENTED — UNVERIFIED | Idempotent completion consumes actual components once, records expected/actual usage and weighted-average output cost; waste remains idempotent/costed | Cargo execution, planning UI and yield/variance reports remain |
 | 32 | Reporting and analytics | IN PROGRESS | Cash-session report and schema inputs exist | Most reports, definitions, pagination and exports missing |
 | 33 | Business date/store operations | IN PROGRESS | Bahrain close-hour business date and regression test | Checklists and full EOD orchestration missing |
-| 34 | Alert centre | NOT STARTED | Durable alert schema only | State workflow, assignment, resolution history and producers required |
+| 34 | Alert centre | IMPLEMENTED — UNVERIFIED | `0018_operational_alerts.sql`; payload-bound creation/transitions; legal persisted lifecycle; assignment; mandatory closure notes; immutable device/user event history; active-alert query; trusted permission and audit boundaries | Rust CI/runtime exercise, producer integration and management UI remain |
 | 35 | Synchronization | IMPLEMENTED — UNVERIFIED | Signed device envelopes; durable leases/backoff; payload-bound hub replay; immutable event acceptance; watermarks; `REQUIRES_REVIEW`; append-only manager resolution | Rust/multi-process tests, network adapter, deployed hub and reconciliation UI remain missing |
 | 36 | Terminal health | NOT STARTED | Device/diagnostic fields exist | Heartbeat collector and health UI missing |
 | 37 | AI back office | NOT STARTED | Safety/action/undo schema and architecture boundary documented | Tool registry, policy engine, previews, confirmations and providers missing |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Compile and execute the attendance workflow on CI, then implement durable operational alerts through the same tenant/device, idempotency and audit boundaries.
+Compile and execute the operational-alert workflow on CI, then integrate automatic alert producers and the management UI before beginning durable background jobs.
