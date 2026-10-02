@@ -23,7 +23,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 04 | Offline authority and policy | IN PROGRESS | Local SQLite authority, atomic bootstrap, offline Argon2 PIN login and local commands exist | Policy versions, bounded offline windows, broader stale-state controls and reconciliation are missing |
 | 05 | Trusted terminal model | IMPLEMENTED — UNVERIFIED | Durable identity/binding, expiring one-use enrollment, Windows Credential Manager secret custody, versioned permissioned rotation, suspend/revoke and attribution | Rust/Windows execution, heartbeat service and remote enrollment UX missing |
 | 06 | Action-bound manager approval | IMPLEMENTED — UNVERIFIED | HMAC binding, expiry and nonce consumption; void consumes exact approval | Production key custody and broader sensitive-action integration missing |
-| 07 | Identity, RBAC, employees, attendance | IN PROGRESS | Argon2id PINs, lockout, users/roles; employee/attendance schema | Admin workflows, custom-role UI and attendance service missing |
+| 07 | Identity, RBAC, employees, attendance | IN PROGRESS | Argon2id PINs and lockout; separate employee records; `0017_attendance_operations.sql`; payload-bound clock/break events; immutable session evidence; missing-clock-out resolution; exact integer-second reports | PIN reset/admin unlock, custom-role UI, schedules and late/early classification, attendance UI and runtime exercise remain |
 | 08 | Cashier workspace | IN PROGRESS | 1024×768 React shell, 48px touch contract, typed command wiring, scanner-focus restoration and lock/logout | Function-key paths and real scanner/touch Windows E2E remain missing |
 | 09 | POS and carts | IN PROGRESS | Persistent durable carts, trusted barcode add/totals, hold/restore and checkout UI | Revalidation diff UX, search/PLU depth, line mutation and override flows incomplete |
 | 10 | Pricing, tax and promotions | IN PROGRESS | Base/branch price lookup, validated tax snapshots, immutable price/cost evidence and price/promotion schema | Deterministic promotion engine, history commands and margin approvals missing |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Compile and execute the delivery/courier workflow on CI, then implement attendance and operational alerts through the same tenant/device, idempotency and audit boundaries.
+Compile and execute the attendance workflow on CI, then implement durable operational alerts through the same tenant/device, idempotency and audit boundaries.

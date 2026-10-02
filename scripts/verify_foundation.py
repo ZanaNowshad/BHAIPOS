@@ -18,6 +18,7 @@ UPGRADE_0013=ROOT/'migrations/0013_customer_store_operations.sql'
 UPGRADE_0014=ROOT/'migrations/0014_production_operations.sql'
 UPGRADE_0015=ROOT/'migrations/0015_expense_operations.sql'
 UPGRADE_0016=ROOT/'migrations/0016_delivery_courier_operations.sql'
+UPGRADE_0017=ROOT/'migrations/0017_attendance_operations.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -52,6 +53,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0014.read_text())
         con.executescript(UPGRADE_0015.read_text())
         con.executescript(UPGRADE_0016.read_text())
+        con.executescript(UPGRADE_0017.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -99,7 +101,8 @@ critical={
     'inventory_operation_results','inventory_reconciliation_runs','inventory_transfer_receipts','inventory_transfer_receipt_lines','stocktake_count_events','stocktake_approvals',
     'procurement_operation_results','purchase_order_events','supplier_invoice_events','supplier_return_events','store_operation_results','customer_credit_payment_allocations','production_events',
     'expense_operation_results','expense_events','expense_payments',
-    'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations'
+    'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations',
+    'employee_operation_results','attendance_operation_results','attendance_sessions','attendance_session_events'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -184,6 +187,19 @@ settlement=uid()
 con.execute("insert into delivery_cash_settlements(id,tenant_id,branch_id,worker_id,operation_id,device_id,user_id,expected_cash_fils,returned_cash_fils,variance_fils,status,note,settled_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",(settlement,ta,ba,worker,uid(),device,user,5000,4900,-100,'DISCREPANCY','short',now))
 con.execute("insert into delivery_cash_settlement_allocations(settlement_id,collection_id,tenant_id,amount_fils) values(?,?,?,?)",(settlement,collection,ta,5000))
 must_fail(lambda: con.execute("delete from delivery_cash_settlement_allocations where collection_id=?",(collection,)), 'IMMUTABLE')
+
+# Attendance evidence is branch/device scoped, state bound and append-only.
+employee,session=uid(),uid()
+con.execute("insert into employees(id,tenant_id,employee_no,name,status) values(?,?,?,'Assistant','ACTIVE')",(employee,ta,'EMP-1'))
+con.execute("insert into employee_branches(employee_id,branch_id) values(?,?)",(employee,ba))
+clock_operation=uid()
+con.execute("insert into attendance_sessions(id,tenant_id,employee_id,branch_id,state,clocked_in_at,break_seconds,created_device_id,created_by_user_id,last_operation_id,updated_at) values(?,?,?,?,'CLOCKED_IN',?,0,?,?,?,?)",(session,ta,employee,ba,now,device,user,clock_operation,now))
+con.execute("insert into attendance_session_events(id,tenant_id,session_id,employee_id,branch_id,operation_id,event_type,previous_state,new_state,occurred_at,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,?,'CLOCK_IN',NULL,'CLOCKED_IN',?,?,?,?)",(uid(),ta,session,employee,ba,clock_operation,now,device,user,now))
+must_fail(lambda: con.execute("insert into attendance_session_events(id,tenant_id,session_id,employee_id,branch_id,operation_id,event_type,previous_state,new_state,occurred_at,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,?,'BREAK_END','CLOCKED_IN','CLOCKED_IN',?,?,?,?)",(uid(),ta,session,employee,ba,uid(),'2026-09-29T02:00:00+00:00',device,user,now)), 'INVALID_ATTENDANCE_EVENT_STATE')
+break_operation=uid()
+con.execute("insert into attendance_session_events(id,tenant_id,session_id,employee_id,branch_id,operation_id,event_type,previous_state,new_state,occurred_at,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,?,'BREAK_START','CLOCKED_IN','ON_BREAK',?,?,?,?)",(uid(),ta,session,employee,ba,break_operation,'2026-09-29T02:00:00+00:00',device,user,now))
+con.execute("update attendance_sessions set state='ON_BREAK',active_break_started_at=?,last_operation_id=?,updated_at=? where id=?",('2026-09-29T02:00:00+00:00',break_operation,now,session))
+must_fail(lambda: con.execute("delete from attendance_session_events where session_id=?",(session,)), 'IMMUTABLE')
 
 audit=uid(); con.execute("insert into audit_events(id,tenant_id,device_id,actor_user_id,event_type,entity_type,entity_id,payload_json,previous_hash,event_hash,created_at) values(?,?,?,?,?,?,?,?,?,?,?)",(audit,ta,device,user,'TEST','x','1','{}','','abc',now))
 must_fail(lambda: con.execute("update audit_events set payload_json='tampered' where id=?",(audit,)), 'IMMUTABLE')
@@ -275,7 +291,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0016_delivery_courier_operations"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0017_attendance_operations"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -323,6 +339,9 @@ for symbol in ['create_expense_category','create_expense','submit_expense','deci
 delivery_ops=(ROOT/'crates/bhaipos-store/src/delivery_ops.rs').read_text()
 for symbol in ['create_delivery_worker','create_delivery_order','transition_delivery','collect_delivery_payment','open_courier_cash','settle_courier_cash']:
     assert symbol in delivery_ops, symbol
+attendance_ops=(ROOT/'crates/bhaipos-store/src/attendance_ops.rs').read_text()
+for symbol in ['create_employee','record_attendance_event','attendance_report']:
+    assert symbol in attendance_ops, symbol
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
@@ -347,5 +366,6 @@ result={
     'local_terminal_binding': 'ok',
     'expense_state_and_evidence_guards': 'ok',
     'delivery_state_collection_and_cash_custody_guards': 'ok',
+    'attendance_state_and_evidence_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))

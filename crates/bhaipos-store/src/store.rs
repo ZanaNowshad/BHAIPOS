@@ -12,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[path = "attendance_ops.rs"]
+mod attendance_ops;
 #[path = "customer_ops.rs"]
 mod customer_ops;
 #[path = "delivery_ops.rs"]
@@ -43,7 +45,8 @@ const MIGRATION_0014: &str = include_str!("../../../migrations/0014_production_o
 const MIGRATION_0015: &str = include_str!("../../../migrations/0015_expense_operations.sql");
 const MIGRATION_0016: &str =
     include_str!("../../../migrations/0016_delivery_courier_operations.sql");
-pub const LATEST_SCHEMA: &str = "0016_delivery_courier_operations";
+const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_operations.sql");
+pub const LATEST_SCHEMA: &str = "0017_attendance_operations";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -568,6 +571,32 @@ pub struct CourierCashSettlementResult {
     pub status: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmployeeResult {
+    pub employee_id: Uuid,
+    pub employee_no: String,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttendanceResult {
+    pub session_id: Uuid,
+    pub employee_id: Uuid,
+    pub state: String,
+    pub break_seconds: i64,
+    pub worked_seconds: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttendanceReport {
+    pub employee_id: Uuid,
+    pub completed_sessions: i64,
+    pub worked_seconds: i64,
+    pub break_seconds: i64,
+    pub missing_clock_out_sessions: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct VoidSaleRequest {
     pub tenant_id: TenantId,
@@ -716,6 +745,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0014)?;
         self.conn.execute_batch(MIGRATION_0015)?;
         self.conn.execute_batch(MIGRATION_0016)?;
+        self.conn.execute_batch(MIGRATION_0017)?;
         Ok(())
     }
     fn ensure_column(
@@ -877,6 +907,10 @@ impl Store {
             ("delivery.dispatch", "Progress and dispatch delivery orders"),
             ("delivery.collect", "Record delivery payment collections"),
             ("delivery.settle", "Reconcile courier cash custody"),
+            ("employee.manage", "Manage employee personnel records"),
+            ("attendance.clock", "Record employee clock and break events"),
+            ("attendance.manage", "Resolve attendance exceptions"),
+            ("attendance.view", "View attendance reports"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
