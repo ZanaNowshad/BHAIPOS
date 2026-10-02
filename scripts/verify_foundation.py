@@ -19,6 +19,7 @@ UPGRADE_0014=ROOT/'migrations/0014_production_operations.sql'
 UPGRADE_0015=ROOT/'migrations/0015_expense_operations.sql'
 UPGRADE_0016=ROOT/'migrations/0016_delivery_courier_operations.sql'
 UPGRADE_0017=ROOT/'migrations/0017_attendance_operations.sql'
+UPGRADE_0018=ROOT/'migrations/0018_operational_alerts.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -54,6 +55,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0015.read_text())
         con.executescript(UPGRADE_0016.read_text())
         con.executescript(UPGRADE_0017.read_text())
+        con.executescript(UPGRADE_0018.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -102,7 +104,8 @@ critical={
     'procurement_operation_results','purchase_order_events','supplier_invoice_events','supplier_return_events','store_operation_results','customer_credit_payment_allocations','production_events',
     'expense_operation_results','expense_events','expense_payments',
     'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations',
-    'employee_operation_results','attendance_operation_results','attendance_sessions','attendance_session_events'
+    'employee_operation_results','attendance_operation_results','attendance_sessions','attendance_session_events',
+    'alert_operation_results','operational_alert_events'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -201,6 +204,27 @@ con.execute("insert into attendance_session_events(id,tenant_id,session_id,emplo
 con.execute("update attendance_sessions set state='ON_BREAK',active_break_started_at=?,last_operation_id=?,updated_at=? where id=?",('2026-09-29T02:00:00+00:00',break_operation,now,session))
 must_fail(lambda: con.execute("delete from attendance_session_events where session_id=?",(session,)), 'IMMUTABLE')
 
+# Operational alerts are tenant/branch/device scoped, state-machine guarded,
+# payload-idempotent at the service boundary, and append-only at the DB boundary.
+alert=uid()
+con.execute("insert into operational_alerts(id,tenant_id,branch_id,severity,alert_type,status,title,details_json,created_at) values(?,?,?,'CRITICAL','SECURITY_EVENT','NEW','Repeated failures','{}',?)",(alert,ta,ba,now))
+create_alert_operation=uid()
+con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,'CREATED',NULL,'NEW',?,?,?)",(uid(),ta,alert,ba,create_alert_operation,device,user,now))
+must_fail(lambda: con.execute("update operational_alerts set status='RESOLVED',resolved_at=? where id=?",(now,alert)), 'INVALID_OPERATIONAL_ALERT_TRANSITION')
+must_fail(lambda: con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,'ACKNOWLEDGED','NEW','ACKNOWLEDGED',?,?,?)",(uid(),tb,alert,bb,uid(),device,user,now)), 'INVALID_OPERATIONAL_ALERT_EVENT')
+ack_operation=uid()
+con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,assigned_user_id,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,'ACKNOWLEDGED','NEW','ACKNOWLEDGED',?,?,?,?)",(uid(),ta,alert,ba,ack_operation,user,device,user,now))
+con.execute("update operational_alerts set status='ACKNOWLEDGED',assigned_user_id=? where id=?",(user,alert))
+progress_operation=uid()
+con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,assigned_user_id,device_id,entered_by_user_id,note,created_at) values(?,?,?,?,?,'IN_PROGRESS','ACKNOWLEDGED','IN_PROGRESS',?,?,?,'Investigating',?)",(uid(),ta,alert,ba,progress_operation,user,device,user,now))
+con.execute("update operational_alerts set status='IN_PROGRESS',assigned_user_id=? where id=?",(user,alert))
+must_fail(lambda: con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,assigned_user_id,device_id,entered_by_user_id,created_at) values(?,?,?,?,?,'RESOLVED','IN_PROGRESS','RESOLVED',?,?,?,?)",(uid(),ta,alert,ba,uid(),user,device,user,now)), 'INVALID_OPERATIONAL_ALERT_EVENT')
+resolve_operation=uid()
+con.execute("insert into operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,assigned_user_id,device_id,entered_by_user_id,note,created_at) values(?,?,?,?,?,'RESOLVED','IN_PROGRESS','RESOLVED',?,?,?,'Credential rotated',?)",(uid(),ta,alert,ba,resolve_operation,user,device,user,now))
+con.execute("update operational_alerts set status='RESOLVED',assigned_user_id=?,resolved_at=? where id=?",(user,now,alert))
+must_fail(lambda: con.execute("update operational_alerts set title='tampered' where id=?",(alert,)), 'IMMUTABLE')
+must_fail(lambda: con.execute("delete from operational_alert_events where alert_id=?",(alert,)), 'IMMUTABLE')
+
 audit=uid(); con.execute("insert into audit_events(id,tenant_id,device_id,actor_user_id,event_type,entity_type,entity_id,payload_json,previous_hash,event_hash,created_at) values(?,?,?,?,?,?,?,?,?,?,?)",(audit,ta,device,user,'TEST','x','1','{}','','abc',now))
 must_fail(lambda: con.execute("update audit_events set payload_json='tampered' where id=?",(audit,)), 'IMMUTABLE')
 
@@ -291,7 +315,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0017_attendance_operations"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0018_operational_alerts"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -367,5 +391,6 @@ result={
     'expense_state_and_evidence_guards': 'ok',
     'delivery_state_collection_and_cash_custody_guards': 'ok',
     'attendance_state_and_evidence_guards': 'ok',
+    'operational_alert_state_and_evidence_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))
