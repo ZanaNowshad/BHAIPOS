@@ -4,9 +4,10 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    CashMovementKind, CashMovementRequest, CheckoutRequest, CloseCashSessionRequest,
-    LocalBootstrapRequest, NewProduct, PaymentInput, RefundLineInput, RefundRequest, Store,
-    StoreError, SyncDeliveryOutcome,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, CashMovementKind,
+    CashMovementRequest, CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest,
+    NewProduct, PaymentInput, RefundLineInput, RefundRequest, Store, StoreError,
+    SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -89,6 +90,10 @@ fn fixture() -> Fixture {
         ("alert.create", "Create operational alerts"),
         ("alert.manage", "Assign and transition operational alerts"),
         ("alert.view", "View operational alerts"),
+        ("job.enqueue", "Enqueue background jobs"),
+        ("job.execute", "Execute background jobs"),
+        ("job.manage", "Cancel and recover background jobs"),
+        ("job.view", "View background jobs"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -4009,5 +4014,227 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
             |row| row.get::<_,i64>(0),
         ).unwrap(),
         7
+    );
+}
+
+#[test]
+fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
+    let mut f = fixture();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let now = t("2026-10-04T12:00:00Z");
+    let enqueue_operation = OperationId::new();
+    let request = BackgroundJobEnqueueRequest {
+        context,
+        user_id: f.user,
+        operation_id: enqueue_operation,
+        job_type: "CATALOGUE_IMPORT".into(),
+        payload_json: serde_json::json!({"source":"catalogue.csv"}).to_string(),
+        progress_total: Some(10),
+        cancellable: true,
+        max_attempts: 2,
+        not_before: None,
+        now,
+    };
+    let queued = f.store.enqueue_background_job(request.clone()).unwrap();
+    assert_eq!(queued.state, "QUEUED");
+    assert_eq!(
+        queued,
+        f.store.enqueue_background_job(request.clone()).unwrap()
+    );
+    let mut changed = request;
+    changed.payload_json = serde_json::json!({"source":"different.csv"}).to_string();
+    assert!(matches!(
+        f.store.enqueue_background_job(changed),
+        Err(StoreError::Conflict(_))
+    ));
+
+    let claim_operation = OperationId::new();
+    let lease = f
+        .store
+        .claim_next_background_job(context, f.user, claim_operation, 120, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lease.job_id, queued.job_id);
+    assert_eq!(lease.attempt, 1);
+    assert_eq!(
+        Some(lease.clone()),
+        f.store
+            .claim_next_background_job(context, f.user, claim_operation, 120, now)
+            .unwrap()
+    );
+    let progress = f
+        .store
+        .heartbeat_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            lease.job_id,
+            lease.lease_token,
+            4,
+            Some(10),
+            120,
+            now + chrono::Duration::seconds(30),
+        )
+        .unwrap();
+    assert_eq!(progress.progress_current, 4);
+    assert!(!progress.cancel_requested);
+    let cancel_operation = OperationId::new();
+    let cancel = f
+        .store
+        .request_background_job_cancellation(
+            context,
+            f.user,
+            cancel_operation,
+            lease.job_id,
+            "operator stopped the import",
+            now + chrono::Duration::seconds(35),
+        )
+        .unwrap();
+    assert_eq!(cancel.state, "RUNNING");
+    assert!(cancel.cancel_requested);
+    assert_eq!(
+        cancel,
+        f.store
+            .request_background_job_cancellation(
+                context,
+                f.user,
+                cancel_operation,
+                lease.job_id,
+                "operator stopped the import",
+                now + chrono::Duration::seconds(35),
+            )
+            .unwrap()
+    );
+    let acknowledged = f
+        .store
+        .finish_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            lease.job_id,
+            lease.lease_token,
+            BackgroundJobFinishOutcome::Cancelled {
+                result_json: Some(serde_json::json!({"rows_applied":4}).to_string()),
+            },
+            now + chrono::Duration::seconds(40),
+        )
+        .unwrap();
+    assert_eq!(acknowledged.state, "CANCELLED");
+    assert!(matches!(
+        f.store.finish_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            lease.job_id,
+            lease.lease_token,
+            BackgroundJobFinishOutcome::Succeeded {
+                result_json: serde_json::json!({"incorrect":true}).to_string(),
+            },
+            now + chrono::Duration::seconds(41),
+        ),
+        Err(StoreError::Conflict(_))
+    ));
+
+    let retry_job = f
+        .store
+        .enqueue_background_job(BackgroundJobEnqueueRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId::new(),
+            job_type: "BACKUP".into(),
+            payload_json: "{}".into(),
+            progress_total: None,
+            cancellable: false,
+            max_attempts: 2,
+            not_before: None,
+            now: now + chrono::Duration::minutes(1),
+        })
+        .unwrap();
+    let retry_lease = f
+        .store
+        .claim_next_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            60,
+            now + chrono::Duration::minutes(1),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry_lease.job_id, retry_job.job_id);
+    let retry = f
+        .store
+        .finish_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            retry_lease.job_id,
+            retry_lease.lease_token,
+            BackgroundJobFinishOutcome::Failed {
+                error: "temporary I/O failure".into(),
+                retryable: true,
+            },
+            now + chrono::Duration::seconds(61),
+        )
+        .unwrap();
+    assert_eq!(retry.state, "QUEUED");
+    assert!(f
+        .store
+        .claim_next_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            60,
+            now + chrono::Duration::seconds(62),
+        )
+        .unwrap()
+        .is_none());
+    let final_lease = f
+        .store
+        .claim_next_background_job(
+            context,
+            f.user,
+            OperationId::new(),
+            60,
+            now + chrono::Duration::seconds(64),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_lease.attempt, 2);
+    let recovery = f
+        .store
+        .recover_expired_background_jobs(
+            context,
+            f.user,
+            OperationId::new(),
+            now + chrono::Duration::seconds(125),
+        )
+        .unwrap();
+    assert_eq!(recovery.requeued, 0);
+    assert_eq!(recovery.failed, 1);
+    assert_eq!(recovery.cancelled, 0);
+    let jobs = f.store.background_jobs(context, f.user, 20).unwrap();
+    assert_eq!(
+        jobs.iter()
+            .find(|job| job.job_id == retry_job.job_id)
+            .unwrap()
+            .state,
+        "FAILED"
+    );
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM background_job_events WHERE tenant_id=?1",
+                params![f.tenant.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        10
     );
 }
