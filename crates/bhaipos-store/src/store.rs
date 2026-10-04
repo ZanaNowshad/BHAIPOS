@@ -1606,27 +1606,50 @@ impl Store {
         if qty.0 <= 0 {
             return Err(StoreError::Validation("quantity must be > 0".into()));
         }
-        let cart_scope: Option<(String, String, String)> = self
-            .conn
+        let tx = self.conn.unchecked_transaction()?;
+        let cart_scope: Option<(String, String, String, String, String)> = tx
             .query_row(
-                "SELECT tenant_id,branch_id,status FROM carts WHERE id=?1",
+                "SELECT tenant_id,branch_id,status,device_id,cashier_user_id FROM carts WHERE id=?1",
                 params![cart.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?;
-        match cart_scope {
-            Some((t, b, s))
-                if t == tenant.to_string() && b == branch.to_string() && s == "ACTIVE" => {}
+        let (device_id, user_id) = match cart_scope {
+            Some((t, b, s, device, user))
+                if t == tenant.to_string() && b == branch.to_string() && s == "ACTIVE" => {
+                    let device_id = DeviceId(Uuid::parse_str(&device).map_err(|_| {
+                        StoreError::Validation("invalid cart device identity".into())
+                    })?);
+                    let user_id = UserId(Uuid::parse_str(&user).map_err(|_| {
+                        StoreError::Validation("invalid cart user identity".into())
+                    })?);
+                    (device_id, user_id)
+                }
             Some(_) => return Err(StoreError::Authorization("cart scope/status mismatch")),
             None => return Err(StoreError::NotFound("cart")),
-        }
-        let row: Option<BarcodeProductRow> = self.conn.query_row(
+        };
+        let row: Option<BarcodeProductRow> = tx.query_row(
             "SELECT p.id,p.name,p.sku,p.base_price_fils,p.current_cost_fils,p.tax_rate_bps,p.tax_inclusive,p.allow_decimal_qty FROM product_barcodes pb JOIN products p ON p.id=pb.product_id JOIN branch_assortments ba ON ba.product_id=p.id AND ba.tenant_id=p.tenant_id AND ba.branch_id=?2 WHERE pb.tenant_id=?1 AND pb.barcode=?3 AND p.status='ACTIVE' AND ba.sellable=1 LIMIT 1",
             params![tenant.to_string(),branch.to_string(),barcode],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
         let (pid, name, sku, base_price, cost, tax_bps, tax_incl, allow_decimal) = match row {
             Some(v) => v,
             None => {
-                self.conn.execute("INSERT INTO unknown_barcodes(tenant_id,branch_id,barcode,first_seen_at,last_seen_at,last_device_id) SELECT tenant_id,branch_id,?2,?3,?3,device_id FROM carts WHERE id=?1 ON CONFLICT(tenant_id,branch_id,barcode) DO UPDATE SET last_seen_at=excluded.last_seen_at,scan_count=unknown_barcodes.scan_count+1,last_device_id=excluded.last_device_id",params![cart.to_string(),barcode,now.to_rfc3339()])?;
+                tx.execute("INSERT INTO unknown_barcodes(tenant_id,branch_id,barcode,first_seen_at,last_seen_at,last_device_id) SELECT tenant_id,branch_id,?2,?3,?3,device_id FROM carts WHERE id=?1 ON CONFLICT(tenant_id,branch_id,barcode) DO UPDATE SET last_seen_at=excluded.last_seen_at,scan_count=unknown_barcodes.scan_count+1,last_device_id=excluded.last_device_id",params![cart.to_string(),barcode,now.to_rfc3339()])?;
+                Self::append_automatic_operational_alert(
+                    &tx,
+                    tenant,
+                    branch,
+                    device_id,
+                    user_id,
+                    "MEDIUM",
+                    "UNKNOWN_BARCODE",
+                    "Unknown barcode requires catalogue resolution",
+                    "unknown_barcode",
+                    barcode,
+                    &serde_json::json!({"barcode": barcode, "cart_id": cart}),
+                    now,
+                )?;
+                tx.commit()?;
                 return Err(StoreError::NotFound("barcode"));
             }
         };
@@ -1635,13 +1658,14 @@ impl Store {
                 "product does not allow decimal quantity".into(),
             ));
         }
-        let price: i64 = self.conn.query_row("SELECT price_fils FROM price_history WHERE tenant_id=?1 AND product_id=?2 AND channel='POS' AND (branch_id=?3 OR branch_id IS NULL) AND effective_from<=?4 AND (effective_to IS NULL OR effective_to>?4) ORDER BY CASE WHEN branch_id=?3 THEN 0 ELSE 1 END,effective_from DESC LIMIT 1",params![tenant.to_string(),pid,branch.to_string(),now.to_rfc3339()],|r|r.get(0)).optional()?.unwrap_or(base_price);
+        let price: i64 = tx.query_row("SELECT price_fils FROM price_history WHERE tenant_id=?1 AND product_id=?2 AND channel='POS' AND (branch_id=?3 OR branch_id IS NULL) AND effective_from<=?4 AND (effective_to IS NULL OR effective_to>?4) ORDER BY CASE WHEN branch_id=?3 THEN 0 ELSE 1 END,effective_from DESC LIMIT 1",params![tenant.to_string(),pid,branch.to_string(),now.to_rfc3339()],|r|r.get(0)).optional()?.unwrap_or(base_price);
         let line = Uuid::new_v4();
-        self.conn.execute("INSERT INTO cart_lines(id,cart_id,product_id,product_name_snapshot,sku_snapshot,barcode_snapshot,quantity_milli,unit_price_fils,unit_cost_fils,tax_category_snapshot,tax_rate_bps,tax_inclusive,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'STANDARD',?10,?11,?12)",params![line.to_string(),cart.to_string(),pid,name,sku,barcode,qty.0,price,cost,tax_bps,tax_incl,now.to_rfc3339()])?;
-        self.conn.execute(
+        tx.execute("INSERT INTO cart_lines(id,cart_id,product_id,product_name_snapshot,sku_snapshot,barcode_snapshot,quantity_milli,unit_price_fils,unit_cost_fils,tax_category_snapshot,tax_rate_bps,tax_inclusive,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'STANDARD',?10,?11,?12)",params![line.to_string(),cart.to_string(),pid,name,sku,barcode,qty.0,price,cost,tax_bps,tax_incl,now.to_rfc3339()])?;
+        tx.execute(
             "UPDATE carts SET version=version+1,updated_at=?2 WHERE id=?1",
             params![cart.to_string(), now.to_rfc3339()],
         )?;
+        tx.commit()?;
         Ok(line)
     }
 
@@ -2008,6 +2032,34 @@ impl Store {
                     QuantityMilli(-l.qty),
                     Money(l.cost),
                 )?;
+                let stock_quantity: i64 = tx.query_row(
+                    "SELECT quantity_milli FROM stock_levels WHERE tenant_id=?1 AND branch_id=?2 AND centre_id=?3 AND product_id=?4",
+                    params![req.tenant_id.to_string(), req.branch_id.to_string(), centre_id, l.product_id],
+                    |row| row.get(0),
+                )?;
+                if stock_quantity < 0 {
+                    let stock_entity_id = format!("{centre_id}:{}", l.product_id);
+                    Self::append_automatic_operational_alert(
+                        &tx,
+                        req.tenant_id,
+                        req.branch_id,
+                        req.device_id,
+                        req.user_id,
+                        "HIGH",
+                        "NEGATIVE_STOCK",
+                        "Product stock is negative after sale",
+                        "stock_level",
+                        &stock_entity_id,
+                        &serde_json::json!({
+                            "centre_id": &centre_id,
+                            "product_id": &l.product_id,
+                            "product_name": &l.name,
+                            "quantity_milli": stock_quantity,
+                            "sale_id": sale_id
+                        }),
+                        req.now,
+                    )?;
+                }
             }
         }
         for p in &req.payments {
@@ -2560,6 +2612,25 @@ impl Store {
                 "HIGH"
             };
             tx.execute("INSERT INTO cash_variance_cases(id,tenant_id,branch_id,cash_session_id,expected_fils,counted_fils,variance_fils,severity,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'OPEN',?9)",params![id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.cash_session_id.to_string(),pre.expected_cash.0,req.counted_cash.0,variance.0,severity,req.now.to_rfc3339()])?;
+            Self::append_automatic_operational_alert(
+                &tx,
+                req.tenant_id,
+                req.branch_id,
+                req.device_id,
+                req.user_id,
+                severity,
+                "CASH_VARIANCE",
+                "Cash-session close variance requires review",
+                "cash_variance_case",
+                &id.to_string(),
+                &serde_json::json!({
+                    "cash_session_id": req.cash_session_id,
+                    "expected_fils": pre.expected_cash.0,
+                    "counted_fils": req.counted_cash.0,
+                    "variance_fils": variance.0
+                }),
+                req.now,
+            )?;
             Some(id)
         } else {
             None
@@ -2746,7 +2817,7 @@ impl Store {
                     }
                     let source_id = format!("{}:{}", void_id, sale_line_id);
                     tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'VOID',?7,?8,'SALE_VOID',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,product_id,req.operation_id.to_string(),qty,cost,source_id,req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-                    Self::apply_cost_projection(
+                Self::apply_cost_projection(
                         &tx,
                         req.tenant_id,
                         req.branch_id,
