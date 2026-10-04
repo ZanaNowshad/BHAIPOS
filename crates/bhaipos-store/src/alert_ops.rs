@@ -6,6 +6,67 @@
 use super::*;
 
 impl Store {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "automatic alert evidence retains authoritative scope, actor, source entity, and event time"
+    )]
+    pub(super) fn append_automatic_operational_alert(
+        tx: &Transaction<'_>,
+        tenant_id: TenantId,
+        branch_id: BranchId,
+        device_id: DeviceId,
+        user_id: UserId,
+        severity: &str,
+        alert_type: &str,
+        title: &str,
+        entity_type: &str,
+        entity_id: &str,
+        details: &serde_json::Value,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Uuid>, StoreError> {
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type=?3 AND entity_type=?4 AND entity_id=?5 AND status NOT IN ('RESOLVED','DISMISSED') LIMIT 1",
+                params![tenant_id.to_string(), branch_id.to_string(), alert_type, entity_type, entity_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing.is_some() {
+            return Ok(None);
+        }
+        let details_json = serde_json::to_string(details)?;
+        let alert_id = Uuid::new_v4();
+        let event_operation_id = OperationId::new();
+        tx.execute(
+            "INSERT INTO operational_alerts(id,tenant_id,branch_id,severity,alert_type,status,entity_type,entity_id,title,details_json,created_at) VALUES(?1,?2,?3,?4,?5,'NEW',?6,?7,?8,?9,?10)",
+            params![alert_id.to_string(), tenant_id.to_string(), branch_id.to_string(), severity, alert_type, entity_type, entity_id, title, details_json, now.to_rfc3339()],
+        )?;
+        tx.execute(
+            "INSERT INTO operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,device_id,entered_by_user_id,note,created_at) VALUES(?1,?2,?3,?4,?5,'CREATED',NULL,'NEW',?6,?7,'Automatically produced from committed domain evidence',?8)",
+            params![Uuid::new_v4().to_string(), tenant_id.to_string(), alert_id.to_string(), branch_id.to_string(), event_operation_id.to_string(), device_id.to_string(), user_id.to_string(), now.to_rfc3339()],
+        )?;
+        let audit_payload = serde_json::json!({
+            "alert_id": alert_id,
+            "severity": severity,
+            "alert_type": alert_type,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "automatic": true
+        });
+        Self::append_audit(
+            tx,
+            tenant_id,
+            device_id,
+            user_id,
+            "OPERATIONAL_ALERT_AUTOMATICALLY_CREATED",
+            "operational_alert",
+            &alert_id.to_string(),
+            &serde_json::to_string(&audit_payload)?,
+            now,
+        )?;
+        Ok(Some(alert_id))
+    }
+
     pub fn create_operational_alert(
         &mut self,
         context: LocalTerminalContext,

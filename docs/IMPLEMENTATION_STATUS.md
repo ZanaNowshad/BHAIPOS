@@ -42,6 +42,14 @@ Status vocabulary:
 - Expense migration reapplication, exact-fils validation, state-transition evidence, post-submission financial immutability, payment amount binding and tenant/device guards pass.
 - Operational-alert migration reapplication, tenant/branch/device scope, legal lifecycle transitions, mandatory closure evidence and append-only history guards pass.
 
+**CI VERIFIED**
+
+- GitHub Actions run `37227313354` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the automatic operational-alert producer change.
+- Unknown-barcode scans atomically persist scan evidence and one active deduplicated alert; repeated scans update evidence without alert flooding.
+- Checkout atomically raises a high-severity negative-stock alert when its inventory consequence makes the affected product/centre balance negative.
+- Cash-session close atomically raises a severity-matched cash-variance alert linked to the persisted variance case.
+- Producer-generated alerts retain authoritative tenant, branch, device and user attribution, append immutable alert history, and add tamper-evident audit evidence inside the source operation transaction.
+
 **IMPLEMENTED / BUILD PENDING**
 
 - integer-fils money with checked aggregation/variance/change arithmetic and deterministic validated basis-point VAT;
@@ -71,6 +79,7 @@ Status vocabulary:
 - idempotent delivery creation and legal state transitions, assigned-rider dispatch, exact payment collection, and append-only courier cash settlement/allocation evidence;
 - separate employee records plus retry-safe clock/break events, immutable attendance evidence, missing-clock-out resolution and exact integer-second work reports;
 - payload-bound operational-alert creation and legal acknowledgement/investigation/closure transitions, assignment, mandatory closure notes, active-alert retrieval, immutable device-attributed history and audit evidence;
+- atomic, active-alert-deduplicated producers for unknown barcodes, checkout-created negative stock and cash-session close variance;
 - partial refund limit/idempotency/stock compensation plus explicit tender reversal effects, duplicate-line rejection and historical receipt-scoped quoting;
 - paid-in/paid-out/safe-drop/no-sale cash movements and session-level expected cash;
 - cash-session close with counted cash, variance, X/Z/EOD report data, and variance-case creation;
@@ -88,7 +97,7 @@ Status vocabulary:
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; alert producers/UI; background jobs; feature flags; backups/restores; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; remaining operational-alert producers and alert management UI; background jobs; feature flags; backups/restores; diagnostics/update records.
 
 ## Runtime components still not implemented
 
