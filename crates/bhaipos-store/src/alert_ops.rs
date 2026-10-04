@@ -406,7 +406,9 @@ impl Store {
         let terminal_cutoff = now
             .checked_sub_signed(chrono::Duration::minutes(policy.terminal_offline_minutes))
             .ok_or_else(|| StoreError::Validation("terminal cutoff overflow".into()))?;
-        let today = now.date_naive();
+        let bahrain_offset = FixedOffset::east_opt(3 * 60 * 60)
+            .ok_or_else(|| StoreError::Validation("invalid Bahrain timezone offset".into()))?;
+        let today = now.with_timezone(&bahrain_offset).date_naive();
         let expiry_horizon = today
             .checked_add_days(chrono::Days::new(policy.expiry_warning_days as u64))
             .ok_or_else(|| StoreError::Validation("expiry horizon overflow".into()))?;

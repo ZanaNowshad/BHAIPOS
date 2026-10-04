@@ -3898,7 +3898,8 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
         device_id: f.device,
         register_id: f.register,
     };
-    let now = t("2026-10-04T18:00:00Z");
+    // At 22:00 UTC the Bahrain calendar date is already 2026-10-05.
+    let now = t("2026-10-04T22:00:00Z");
     let second_device = DeviceId::new();
     f.store
         .create_device(
@@ -3948,7 +3949,7 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
         .unwrap();
     let invoice = Uuid::new_v4();
     f.store.connection().execute(
-        "INSERT INTO supplier_invoices(id,tenant_id,branch_id,supplier_id,invoice_number,invoice_date,due_date,subtotal_fils,tax_fils,total_fils,amount_paid_fils,status,created_at) VALUES(?1,?2,?3,?4,'OVERDUE-1','2026-09-01','2026-09-30',10000,1000,11000,0,'OPEN',?5)",
+        "INSERT INTO supplier_invoices(id,tenant_id,branch_id,supplier_id,invoice_number,invoice_date,due_date,subtotal_fils,tax_fils,total_fils,amount_paid_fils,status,created_at) VALUES(?1,?2,?3,?4,'OVERDUE-1','2026-09-01','2026-10-04',10000,1000,11000,0,'OPEN',?5)",
         params![invoice.to_string(),f.tenant.to_string(),f.branch.to_string(),supplier,now.to_rfc3339()],
     ).unwrap();
     let backup = Uuid::new_v4();
