@@ -1105,6 +1105,74 @@ fn unknown_barcode_is_recorded_for_resolution() {
             .unwrap(),
         1
     );
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type='UNKNOWN_BARCODE' AND entity_type='unknown_barcode' AND entity_id='9999999999999' AND status='NEW'",
+                params![f.tenant.to_string(), f.branch.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn checkout_that_creates_negative_stock_persists_one_active_alert() {
+    let mut f = fixture();
+    let now = t("2026-09-29T01:00:00Z");
+    let cart = CartId::new();
+    f.store
+        .create_cart(cart, f.tenant, f.branch, f.device, f.user, now)
+        .unwrap();
+    f.store
+        .add_barcode_to_cart(
+            f.tenant,
+            f.branch,
+            cart,
+            "6290000000015",
+            QuantityMilli(11_000),
+            now,
+        )
+        .unwrap();
+    let operation_id = OperationId::new();
+    let request = || CheckoutRequest {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+        user_id: f.user,
+        cart_id: cart,
+        operation_id,
+        cash_session_id: Some(f.cash_session),
+        payments: vec![PaymentInput {
+            kind: TenderKind::Cash,
+            amount: Money(12_100),
+            tendered: Some(Money(12_100)),
+            reference: None,
+        }],
+        now,
+    };
+    let sale = f.store.checkout(request()).unwrap();
+    assert_eq!(f.store.checkout(request()).unwrap(), sale);
+    assert_eq!(
+        f.store
+            .stock_quantity(f.tenant, f.branch, f.product)
+            .unwrap(),
+        -1_000
+    );
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type='NEGATIVE_STOCK' AND entity_type='stock_level' AND status='NEW'",
+                params![f.tenant.to_string(), f.branch.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -1665,6 +1733,21 @@ fn cash_session_report_accounts_for_refunds_movements_and_close_variance() {
     assert!(closed.variance_case_id.is_some());
     let replay = f.store.close_cash_session(req()).unwrap();
     assert_eq!(closed, replay);
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type='CASH_VARIANCE' AND entity_type='cash_variance_case' AND entity_id=?3 AND status='NEW'",
+                params![
+                    f.tenant.to_string(),
+                    f.branch.to_string(),
+                    closed.variance_case_id.unwrap().to_string()
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
