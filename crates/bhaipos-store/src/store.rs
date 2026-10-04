@@ -2025,7 +2025,7 @@ impl Store {
                     tx.execute("INSERT INTO stock_levels(tenant_id,branch_id,centre_id,product_id,quantity_milli) VALUES(?1,?2,?3,?4,?5)",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,l.product_id,-l.qty])?;
                 }
                 tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'SALE',?7,?8,'SALE',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,l.product_id,req.operation_id.to_string(),-l.qty,l.cost,sale_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-                    Self::apply_cost_projection(
+                Self::apply_cost_projection(
                     &tx,
                     req.tenant_id,
                     req.branch_id,
@@ -2819,7 +2819,7 @@ impl Store {
                     }
                     let source_id = format!("{}:{}", void_id, sale_line_id);
                     tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'VOID',?7,?8,'SALE_VOID',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,product_id,req.operation_id.to_string(),qty,cost,source_id,req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-                Self::apply_cost_projection(
+                    Self::apply_cost_projection(
                         &tx,
                         req.tenant_id,
                         req.branch_id,
