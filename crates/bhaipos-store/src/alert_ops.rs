@@ -376,6 +376,374 @@ impl Store {
             .collect()
     }
 
+    pub fn evaluate_operational_alerts(
+        &mut self,
+        context: LocalTerminalContext,
+        user: UserId,
+        operation_id: OperationId,
+        policy: OperationalAlertEvaluationPolicy,
+        now: DateTime<Utc>,
+    ) -> Result<OperationalAlertEvaluationResult, StoreError> {
+        self.validate_local_session(context, user)?;
+        if !(1..=525_600).contains(&policy.sync_delay_minutes)
+            || !(1..=525_600).contains(&policy.terminal_offline_minutes)
+            || !(1..=3_650).contains(&policy.expiry_warning_days)
+            || !(1..=100).contains(&policy.authentication_failure_threshold)
+        {
+            return Err(StoreError::Validation(
+                "invalid operational alert evaluation policy".into(),
+            ));
+        }
+        let digest = sha256_hex(&serde_json::to_vec(&policy)?);
+        if let Some(result) = self.load_alert_operation(
+            operation_id,
+            "EVALUATE",
+            &digest,
+            context.tenant_id,
+        )? {
+            return Ok(result);
+        }
+        let sync_cutoff = now
+            .checked_sub_signed(chrono::Duration::minutes(policy.sync_delay_minutes))
+            .ok_or_else(|| StoreError::Validation("sync delay cutoff overflow".into()))?;
+        let terminal_cutoff = now
+            .checked_sub_signed(chrono::Duration::minutes(
+                policy.terminal_offline_minutes,
+            ))
+            .ok_or_else(|| StoreError::Validation("terminal cutoff overflow".into()))?;
+        let today = now.date_naive();
+        let expiry_horizon = today
+            .checked_add_days(chrono::Days::new(policy.expiry_warning_days as u64))
+            .ok_or_else(|| StoreError::Validation("expiry horizon overflow".into()))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "alert.create",
+        )?;
+
+        let low_stock = {
+            let mut statement = tx.prepare(
+                "SELECT p.id,p.name,COALESCE(SUM(sl.quantity_milli),0),rp.reorder_point_milli FROM reorder_policies rp JOIN products p ON p.id=rp.product_id AND p.tenant_id=rp.tenant_id LEFT JOIN stock_levels sl ON sl.tenant_id=rp.tenant_id AND sl.branch_id=rp.branch_id AND sl.product_id=rp.product_id WHERE rp.tenant_id=?1 AND rp.branch_id=?2 AND rp.active=1 AND rp.reorder_point_milli IS NOT NULL AND p.status='ACTIVE' GROUP BY p.id,p.name,rp.reorder_point_milli HAVING COALESCE(SUM(sl.quantity_milli),0)<=rp.reorder_point_milli",
+            )?;
+            statement
+                .query_map(
+                    params![context.tenant_id.to_string(), context.branch_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let expiring_lots = {
+            let mut statement = tx.prepare(
+                "SELECT il.id,p.name,il.expires_on,SUM(lb.quantity_milli) FROM inventory_lots il JOIN products p ON p.id=il.product_id AND p.tenant_id=il.tenant_id JOIN lot_balances lb ON lb.lot_id=il.id AND lb.tenant_id=il.tenant_id WHERE il.tenant_id=?1 AND lb.branch_id=?2 AND il.status='ACTIVE' AND il.expires_on IS NOT NULL AND date(il.expires_on)<=date(?3) GROUP BY il.id,p.name,il.expires_on HAVING SUM(lb.quantity_milli)>0",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        expiry_horizon.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let delayed_sync = {
+            let mut statement = tx.prepare(
+                "SELECT device_id,MIN(updated_at),COUNT(*) FROM sync_queue WHERE tenant_id=?1 AND branch_id=?2 AND state IN ('PENDING','SENDING','RETRYING') AND datetime(updated_at)<datetime(?3) GROUP BY device_id",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        sync_cutoff.to_rfc3339()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let offline_terminals = {
+            let mut statement = tx.prepare(
+                "SELECT id,label,last_heartbeat_at,created_at FROM devices WHERE tenant_id=?1 AND branch_id=?2 AND status='ACTIVE' AND id!=?3 AND datetime(COALESCE(last_heartbeat_at,created_at))<datetime(?4)",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        context.device_id.to_string(),
+                        terminal_cutoff.to_rfc3339()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let overdue_invoices = {
+            let mut statement = tx.prepare(
+                "SELECT si.id,si.invoice_number,s.name,si.due_date,si.total_fils-si.amount_paid_fils FROM supplier_invoices si JOIN suppliers s ON s.id=si.supplier_id AND s.tenant_id=si.tenant_id WHERE si.tenant_id=?1 AND si.branch_id=?2 AND si.status IN ('OPEN','PARTIALLY_PAID') AND si.due_date IS NOT NULL AND date(si.due_date)<date(?3) AND si.total_fils>si.amount_paid_fils",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        today.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let failed_backups = {
+            let mut statement = tx.prepare(
+                "SELECT id,backup_type,state,integrity_state,created_at FROM backup_records WHERE tenant_id=?1 AND (branch_id=?2 OR branch_id IS NULL) AND (state='FAILED' OR integrity_state IN ('FAILED','CORRUPT'))",
+            )?;
+            statement
+                .query_map(
+                    params![context.tenant_id.to_string(), context.branch_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, String>(4)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let authentication_risks = {
+            let mut statement = tx.prepare(
+                "SELECT u.id,u.display_name,u.failed_attempts,u.status FROM users u WHERE u.tenant_id=?1 AND u.failed_attempts>=?2 AND u.status IN ('ACTIVE','LOCKED') AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3))",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        policy.authentication_failure_threshold,
+                        context.branch_id.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut created_alerts = 0usize;
+        let mut existing_alerts = 0usize;
+        let mut produce = |severity: &str,
+                           alert_type: &str,
+                           title: String,
+                           entity_type: &str,
+                           entity_id: &str,
+                           details: serde_json::Value|
+         -> Result<(), StoreError> {
+            if Self::append_automatic_operational_alert(
+                &tx,
+                context.tenant_id,
+                context.branch_id,
+                context.device_id,
+                user,
+                severity,
+                alert_type,
+                &title,
+                entity_type,
+                entity_id,
+                &details,
+                now,
+            )?
+            .is_some()
+            {
+                created_alerts += 1;
+            } else {
+                existing_alerts += 1;
+            }
+            Ok(())
+        };
+        for (product_id, name, quantity_milli, reorder_point_milli) in low_stock {
+            produce(
+                if quantity_milli < 0 { "HIGH" } else { "MEDIUM" },
+                "LOW_STOCK",
+                format!("Low stock: {name}"),
+                "product",
+                &product_id,
+                serde_json::json!({
+                    "quantity_milli": quantity_milli,
+                    "reorder_point_milli": reorder_point_milli
+                }),
+            )?;
+        }
+        for (lot_id, name, expires_on, quantity_milli) in expiring_lots {
+            let expiry = chrono::NaiveDate::parse_from_str(&expires_on, "%Y-%m-%d")
+                .map_err(|_| StoreError::Validation("invalid inventory lot expiry".into()))?;
+            let days_remaining = expiry.signed_duration_since(today).num_days();
+            produce(
+                if days_remaining < 0 {
+                    "HIGH"
+                } else if days_remaining <= 3 {
+                    "MEDIUM"
+                } else {
+                    "LOW"
+                },
+                "EXPIRY",
+                format!("Expiring stock: {name}"),
+                "inventory_lot",
+                &lot_id,
+                serde_json::json!({
+                    "expires_on": expires_on,
+                    "days_remaining": days_remaining,
+                    "quantity_milli": quantity_milli
+                }),
+            )?;
+        }
+        for (device_id, oldest_update, pending_count) in delayed_sync {
+            produce(
+                "HIGH",
+                "SYNC_DELAY",
+                "Terminal synchronization is delayed".into(),
+                "device",
+                &device_id,
+                serde_json::json!({
+                    "oldest_pending_update": oldest_update,
+                    "pending_count": pending_count,
+                    "threshold_minutes": policy.sync_delay_minutes
+                }),
+            )?;
+        }
+        for (device_id, label, last_heartbeat_at, created_at) in offline_terminals {
+            produce(
+                "HIGH",
+                "TERMINAL_OFFLINE",
+                format!("Terminal offline: {label}"),
+                "device",
+                &device_id,
+                serde_json::json!({
+                    "last_heartbeat_at": last_heartbeat_at,
+                    "device_created_at": created_at,
+                    "threshold_minutes": policy.terminal_offline_minutes
+                }),
+            )?;
+        }
+        for (invoice_id, invoice_number, supplier_name, due_date, balance_fils) in overdue_invoices {
+            produce(
+                "HIGH",
+                "OVERDUE_SUPPLIER_INVOICE",
+                format!("Supplier invoice overdue: {supplier_name}"),
+                "supplier_invoice",
+                &invoice_id,
+                serde_json::json!({
+                    "invoice_number": invoice_number,
+                    "due_date": due_date,
+                    "balance_fils": balance_fils
+                }),
+            )?;
+        }
+        for (backup_id, backup_type, state, integrity_state, created_at) in failed_backups {
+            produce(
+                "CRITICAL",
+                "BACKUP_FAILURE",
+                "Backup failed or failed integrity verification".into(),
+                "backup",
+                &backup_id,
+                serde_json::json!({
+                    "backup_type": backup_type,
+                    "state": state,
+                    "integrity_state": integrity_state,
+                    "created_at": created_at
+                }),
+            )?;
+        }
+        for (user_id, display_name, failed_attempts, status) in authentication_risks {
+            produce(
+                "CRITICAL",
+                "SECURITY_EVENT",
+                format!("Repeated authentication failures: {display_name}"),
+                "user",
+                &user_id,
+                serde_json::json!({
+                    "failed_attempts": failed_attempts,
+                    "account_status": status,
+                    "threshold": policy.authentication_failure_threshold
+                }),
+            )?;
+        }
+        drop(produce);
+        let result = OperationalAlertEvaluationResult {
+            operation_id,
+            created_alerts,
+            existing_alerts,
+            evaluated_at: now.to_rfc3339(),
+        };
+        Self::record_alert_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "EVALUATE",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "OPERATIONAL_ALERTS_EVALUATED",
+            "branch",
+            &context.branch_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     fn load_alert_operation<T: DeserializeOwned>(
         &self,
         operation_id: OperationId,
