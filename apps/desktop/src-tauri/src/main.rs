@@ -12,8 +12,9 @@ use bhaipos_store::{
     CashMovementResult, CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
     FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
-    LocalBootstrapResult, LocalTerminalContext, PaymentInput, RefundLineInput, RefundQuote,
-    RefundRequest as StoreRefundRequest, RefundResult, RefundableSale, Store,
+    LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
+    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
+    RefundableSale, Store,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,8 @@ struct LoginRequest {
 struct LoginResponse {
     display_name: String,
     cash_session_id: Option<String>,
+    can_view_alerts: bool,
+    can_manage_alerts: bool,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +175,15 @@ struct CashMovementRequest {
 struct CloseCashSessionRequest {
     operation_id: String,
     counted_cash_fils: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransitionOperationalAlertRequest {
+    operation_id: String,
+    alert_id: String,
+    new_status: String,
+    note: Option<String>,
 }
 
 fn command_error(error: impl std::fmt::Display) -> String {
@@ -319,6 +331,12 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let cash_session_id = store
         .active_cash_session_for(terminal, user_id)
         .map_err(command_error)?;
+    let can_view_alerts = store
+        .user_has_permission(terminal, user_id, "alert.view")
+        .map_err(command_error)?;
+    let can_manage_alerts = store
+        .user_has_permission(terminal, user_id, "alert.manage")
+        .map_err(command_error)?;
     *state
         .session
         .lock()
@@ -330,6 +348,8 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     Ok(LoginResponse {
         display_name,
         cash_session_id: cash_session_id.map(|id| id.to_string()),
+        can_view_alerts,
+        can_manage_alerts,
     })
 }
 
@@ -706,6 +726,42 @@ fn close_cash_session(
     Ok(result)
 }
 
+#[tauri::command]
+fn list_operational_alerts(
+    state: State<'_, AppState>,
+) -> Result<Vec<OperationalAlertSummary>, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .active_operational_alerts(session.terminal, session.user_id, 200)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn transition_operational_alert(
+    state: State<'_, AppState>,
+    request: TransitionOperationalAlertRequest,
+) -> Result<OperationalAlertResult, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .transition_operational_alert(
+            session.terminal,
+            session.user_id,
+            OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            parse_uuid(&request.alert_id, "alert ID")?,
+            &request.new_status,
+            Some(session.user_id),
+            request.note.as_deref(),
+            Utc::now(),
+        )
+        .map_err(command_error)
+}
+
 fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
     let state = handle.state::<AppState>();
     let terminal = state
@@ -857,6 +913,8 @@ fn main() {
             record_cash_movement,
             cash_session_report,
             close_cash_session,
+            list_operational_alerts,
+            transition_operational_alert,
         ])
         .run(tauri::generate_context!())
         .expect("BHAIPOS desktop runtime failed");

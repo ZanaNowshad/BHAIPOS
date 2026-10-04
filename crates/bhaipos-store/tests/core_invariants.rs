@@ -3756,6 +3756,14 @@ fn operational_alerts_are_idempotent_state_bound_and_append_evidenced() {
         device_id: f.device,
         register_id: f.register,
     };
+    assert!(f
+        .store
+        .user_has_permission(context, f.user, "alert.view")
+        .unwrap());
+    assert!(!f
+        .store
+        .user_has_permission(context, f.user, "unknown.permission")
+        .unwrap());
     let alert_id = Uuid::new_v4();
     let create_operation = OperationId::new();
     let created = f
