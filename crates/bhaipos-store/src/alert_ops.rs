@@ -395,21 +395,16 @@ impl Store {
             ));
         }
         let digest = sha256_hex(&serde_json::to_vec(&policy)?);
-        if let Some(result) = self.load_alert_operation(
-            operation_id,
-            "EVALUATE",
-            &digest,
-            context.tenant_id,
-        )? {
+        if let Some(result) =
+            self.load_alert_operation(operation_id, "EVALUATE", &digest, context.tenant_id)?
+        {
             return Ok(result);
         }
         let sync_cutoff = now
             .checked_sub_signed(chrono::Duration::minutes(policy.sync_delay_minutes))
             .ok_or_else(|| StoreError::Validation("sync delay cutoff overflow".into()))?;
         let terminal_cutoff = now
-            .checked_sub_signed(chrono::Duration::minutes(
-                policy.terminal_offline_minutes,
-            ))
+            .checked_sub_signed(chrono::Duration::minutes(policy.terminal_offline_minutes))
             .ok_or_else(|| StoreError::Validation("terminal cutoff overflow".into()))?;
         let today = now.date_naive();
         let expiry_horizon = today
@@ -670,7 +665,8 @@ impl Store {
                 }),
             )?;
         }
-        for (invoice_id, invoice_number, supplier_name, due_date, balance_fils) in overdue_invoices {
+        for (invoice_id, invoice_number, supplier_name, due_date, balance_fils) in overdue_invoices
+        {
             produce(
                 "HIGH",
                 "OVERDUE_SUPPLIER_INVOICE",
