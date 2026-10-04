@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 export type Health = { ready: boolean; database: string; schema: string; initialized: boolean; authenticated: boolean };
 export type IdResponse = { id: string };
-export type LoginResponse = { displayName: string; cashSessionId: string | null };
+export type LoginResponse = { displayName: string; cashSessionId: string | null; canViewAlerts:boolean; canManageAlerts:boolean };
 export type CartLine = {
   id: string; product_id: string; name: string; sku: string; barcode: string | null;
   quantity: number; unit_price: number; net: number; tax: number; gross: number;
@@ -20,6 +20,7 @@ export type RefundableSaleLine = { sale_line_id:string; product_name:string; sol
 export type RefundableSale = { sale_id:string; receipt_number:string; completed_at:string; lines:RefundableSaleLine[] };
 export type RefundQuote = { subtotal:number; tax:number; total:number };
 export type RefundResult = { refund_id:string; subtotal:number; tax:number; total:number };
+export type OperationalAlert = { alert_id:string; severity:'CRITICAL'|'HIGH'|'MEDIUM'|'LOW'; alert_type:string; status:'NEW'|'ACKNOWLEDGED'|'IN_PROGRESS'; title:string; assigned_user_id:string|null; created_at:string };
 
 export const posApi = {
   health: () => invoke<Health>('health'),
@@ -43,4 +44,6 @@ export const posApi = {
   recordCashMovement: (request: { operationId:string; kind:'PAID_IN'|'PAID_OUT'|'SAFE_DROP'|'NO_SALE'|'PETTY_CASH'; amountFils:number; reason?:string }) => invoke('record_cash_movement',{request}),
   cashSessionReport: () => invoke('cash_session_report'),
   closeCashSession: (operationId:string,countedCashFils:number) => invoke('close_cash_session',{request:{operationId,countedCashFils}}),
+  listOperationalAlerts: () => invoke<OperationalAlert[]>('list_operational_alerts'),
+  transitionOperationalAlert: (alertId:string,newStatus:'ACKNOWLEDGED'|'IN_PROGRESS'|'RESOLVED'|'DISMISSED',note?:string) => invoke('transition_operational_alert',{request:{operationId:crypto.randomUUID(),alertId,newStatus,note}}),
 };

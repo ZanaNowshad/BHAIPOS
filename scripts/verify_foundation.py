@@ -307,6 +307,7 @@ required_commands={
     'close_cash_session',
     'cart_snapshot','hold_cart','list_held_carts','restore_cart',
     'find_refundable_sale','quote_refund','list_failed_print_jobs',
+    'list_operational_alerts','transition_operational_alert',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -333,11 +334,14 @@ pos_api=pos_api_path.read_text()
 assert "from '@tauri-apps/api/core'" in pos_api
 for command in ['create_cart','cart_snapshot','scan_barcode','hold_cart','list_held_carts','restore_cart','checkout','find_refundable_sale','quote_refund','refund','list_failed_print_jobs','requeue_failed_print_job','rotate_local_device_credential','logout']:
     assert f"'{command}'" in pos_api, command
+for command in ['list_operational_alerts','transition_operational_alert']:
+    assert f"'{command}'" in pos_api, command
 assert 'const seed' not in cashier_ui
 assert '.reduce(' not in cashier_ui
 assert 'tenantId' not in pos_api and 'branchId' not in pos_api and 'deviceId' not in pos_api and 'userId' not in pos_api
 assert 'useBarcodeFocus' in cashier_ui
 assert 'onClick={showRefund}' in cashier_ui and 'onClick={showPrintRecovery}' in cashier_ui
+assert "phase==='admin'" in cashier_ui and 'Alert Centre' in cashier_ui
 assert 'recover_stale_print_jobs' in rust_authoritative
 assert 'lease_token' in rust_authoritative and 'receipt_text' in rust_authoritative
 assert (ROOT/'apps/desktop/src-tauri/src/printer.rs').exists()

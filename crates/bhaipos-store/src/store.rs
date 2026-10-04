@@ -1042,6 +1042,29 @@ impl Store {
         Ok(())
     }
 
+    pub fn user_has_permission(
+        &self,
+        context: LocalTerminalContext,
+        user: UserId,
+        permission: &str,
+    ) -> Result<bool, StoreError> {
+        self.validate_local_session(context, user)?;
+        let allowed: Option<i32> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM user_roles ur JOIN roles ro ON ro.id=ur.role_id JOIN role_permissions rp ON rp.role_id=ro.id JOIN permissions p ON p.code=rp.permission_code WHERE ur.user_id=?1 AND ro.tenant_id=?2 AND p.code=?3 AND (ur.branch_id IS NULL OR ur.branch_id=?4) LIMIT 1",
+                params![
+                    user.to_string(),
+                    context.tenant_id.to_string(),
+                    permission,
+                    context.branch_id.to_string()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(allowed.is_some())
+    }
+
     pub fn create_tenant(
         &self,
         id: TenantId,

@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type Payment, type RefundableSale } from './api/pos';
+import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
-type Phase = 'loading'|'setup'|'login'|'cashier';
+type Phase = 'loading'|'setup'|'login'|'cashier'|'admin';
 type Tender = Payment['kind'];
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -18,6 +18,9 @@ export function App() {
   const [phase,setPhase]=useState<Phase>('loading');
   const [cashierName,setCashierName]=useState('');
   const [cashSessionId,setCashSessionId]=useState<string|null>(null);
+  const [canViewAlerts,setCanViewAlerts]=useState(false);
+  const [canManageAlerts,setCanManageAlerts]=useState(false);
+  const [alerts,setAlerts]=useState<OperationalAlert[]>([]);
   const [cart,setCart]=useState<CartSnapshot|null>(null);
   const [selected,setSelected]=useState<string|null>(null);
   const [scan,setScan]=useState('');
@@ -40,9 +43,25 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
+  }
+
+  async function showAlertCentre(){
+    try{setAlerts(await posApi.listOperationalAlerts());setPhase('admin');setNotice('Operational alerts loaded');}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function transitionAlert(alert:OperationalAlert,newStatus:'ACKNOWLEDGED'|'IN_PROGRESS'|'RESOLVED'|'DISMISSED'){
+    let note:string|undefined;
+    if(newStatus==='RESOLVED'||newStatus==='DISMISSED'){
+      const entered=window.prompt(`${newStatus==='RESOLVED'?'Resolution':'Dismissal'} evidence`,'');
+      if(!entered?.trim()){setNotice('A closure note is required');return;}
+      note=entered.trim();
+    }
+    try{await posApi.transitionOperationalAlert(alert.alert_id,newStatus,note);setAlerts(await posApi.listOperationalAlerts());setNotice(`Alert ${newStatus.toLowerCase().replace('_',' ')}`);}
+    catch(error){setNotice(message(error));}
   }
 
   async function scanProduct(event:FormEvent){
@@ -128,18 +147,19 @@ export function App() {
     catch(error){setNotice(message(error));}
   }
 
-  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setPhase('login');setNotice('Terminal locked');}
+  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setAlerts([]);setPhase('login');setNotice('Terminal locked');}
 
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
+  if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
 
   return <div className="app-shell">
     <header className="topbar">
-      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0010</span></div>
+      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0018</span></div>
       <div className="status"><span className="dot"/>{notice}</div>
-      <div><button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
+      <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
     </header>
     <main className="cashier-grid">
       <section className="selling-panel">
@@ -168,10 +188,23 @@ export function App() {
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
+}
+
+function AlertCentre({alerts,canManage,notice,onTransition,onRefresh,onCashier,onLock}:{alerts:OperationalAlert[];canManage:boolean;notice:string;onTransition:(alert:OperationalAlert,status:'ACKNOWLEDGED'|'IN_PROGRESS'|'RESOLVED'|'DISMISSED')=>Promise<void>;onRefresh:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
+  const action=(alert:OperationalAlert,status:'ACKNOWLEDGED'|'IN_PROGRESS'|'RESOLVED'|'DISMISSED',label:string)=><button onClick={()=>onTransition(alert,status)}>{label}</button>;
+  return <div className="admin-shell">
+    <nav className="admin-nav"><h2>BHAIPOS</h2><button className="cashier-return" onClick={onCashier}>Return to Cashier</button><button className="active">Alert Centre</button><button onClick={onRefresh}>Refresh</button><button onClick={onLock}>Lock Terminal</button></nav>
+    <main className="admin-main"><header><div><span className="eyebrow">Durable operational evidence</span><h1>Alert Centre</h1><p>{notice}</p></div><span className="badge">{alerts.length} active</span></header>
+      <section className="alert-list">{alerts.length===0?<article className="alert-empty"><h2>No active alerts</h2><p>Resolved and dismissed alerts remain preserved in immutable history.</p></article>:alerts.map(alert=><article className={`alert-card severity-${alert.severity.toLowerCase()}`} key={alert.alert_id}>
+        <div className="alert-copy"><div><span className="alert-severity">{alert.severity}</span><span className="alert-type">{alert.alert_type.replaceAll('_',' ')}</span></div><h2>{alert.title}</h2><p>{alert.status.replace('_',' ')} · {new Date(alert.created_at).toLocaleString()}</p></div>
+        {canManage&&<div className="alert-actions">{alert.status==='NEW'&&action(alert,'ACKNOWLEDGED','Acknowledge')}{alert.status==='ACKNOWLEDGED'&&<>{action(alert,'IN_PROGRESS','Investigate')}{action(alert,'DISMISSED','Dismiss')}</>}{alert.status==='IN_PROGRESS'&&<>{action(alert,'RESOLVED','Resolve')}{action(alert,'DISMISSED','Dismiss')}</>}</div>}
+      </article>)}</section>
+    </main>
+  </div>;
 }
 
 function SetupScreen({onReady,setNotice}:{onReady:()=>void;setNotice:(value:string)=>void}){
