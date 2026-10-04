@@ -49,6 +49,8 @@ Status vocabulary:
 - Checkout atomically raises a high-severity negative-stock alert when its inventory consequence makes the affected product/centre balance negative.
 - Cash-session close atomically raises a severity-matched cash-variance alert linked to the persisted variance case.
 - Producer-generated alerts retain authoritative tenant, branch, device and user attribution, append immutable alert history, and add tamper-evident audit evidence inside the source operation transaction.
+- GitHub Actions run `37228681820` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the trusted Alert Centre change.
+- The Admin Alert Centre lists only the authenticated terminal branch's active alerts, exposes legal lifecycle actions according to live capabilities, requires closure evidence and binds assignment to the authenticated user inside the trusted desktop service; backend RBAC remains authoritative.
 
 **IMPLEMENTED / BUILD PENDING**
 
@@ -97,7 +99,7 @@ Status vocabulary:
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; remaining operational-alert producers and alert management UI; background jobs; feature flags; backups/restores; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; remaining operational-alert producers; background jobs; feature flags; backups/restores; diagnostics/update records.
 
 ## Runtime components still not implemented
 
