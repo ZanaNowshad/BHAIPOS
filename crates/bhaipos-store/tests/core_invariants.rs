@@ -3937,11 +3937,15 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
         "INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,attempts,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'product',?6,'UPSERT','{}','RETRYING',2,'2026-10-04T14:00:00Z','2026-10-04T14:00:00Z')",
         params![Uuid::new_v4().to_string(),f.tenant.to_string(),f.branch.to_string(),f.device.to_string(),OperationId::new().to_string(),f.product.to_string()],
     ).unwrap();
-    let supplier: String = f.store.connection().query_row(
-        "SELECT id FROM suppliers WHERE tenant_id=?1 LIMIT 1",
-        params![f.tenant.to_string()],
-        |row| row.get(0),
-    ).unwrap();
+    let supplier: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT id FROM suppliers WHERE tenant_id=?1 LIMIT 1",
+            params![f.tenant.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
     let invoice = Uuid::new_v4();
     f.store.connection().execute(
         "INSERT INTO supplier_invoices(id,tenant_id,branch_id,supplier_id,invoice_number,invoice_date,due_date,subtotal_fils,tax_fils,total_fils,amount_paid_fils,status,created_at) VALUES(?1,?2,?3,?4,'OVERDUE-1','2026-09-01','2026-09-30',10000,1000,11000,1000,'PARTIALLY_PAID',?5)",
@@ -3952,10 +3956,13 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
         "INSERT INTO backup_records(id,tenant_id,branch_id,backup_type,storage_path,sha256,schema_version,app_version,state,integrity_state,created_at) VALUES(?1,?2,?3,'SCHEDULED','backup.db',?4,'0018','0.1.0','FAILED','FAILED',?5)",
         params![backup.to_string(),f.tenant.to_string(),f.branch.to_string(),"0".repeat(64),now.to_rfc3339()],
     ).unwrap();
-    f.store.connection().execute(
-        "UPDATE users SET failed_attempts=4 WHERE id=?1",
-        params![f.user.to_string()],
-    ).unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE users SET failed_attempts=4 WHERE id=?1",
+            params![f.user.to_string()],
+        )
+        .unwrap();
 
     let policy = bhaipos_store::OperationalAlertEvaluationPolicy {
         sync_delay_minutes: 60,
@@ -3964,32 +3971,34 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
         authentication_failure_threshold: 3,
     };
     let operation_id = OperationId::new();
-    let first = f.store.evaluate_operational_alerts(
-        context,
-        f.user,
-        operation_id,
-        policy,
-        now,
-    ).unwrap();
+    let first = f
+        .store
+        .evaluate_operational_alerts(context, f.user, operation_id, policy, now)
+        .unwrap();
     assert_eq!(first.created_alerts, 7);
     assert_eq!(first.existing_alerts, 0);
     assert_eq!(
         first,
-        f.store.evaluate_operational_alerts(
+        f.store
+            .evaluate_operational_alerts(
+                context,
+                f.user,
+                operation_id,
+                policy,
+                now + chrono::Duration::minutes(5),
+            )
+            .unwrap()
+    );
+    let second = f
+        .store
+        .evaluate_operational_alerts(
             context,
             f.user,
-            operation_id,
+            OperationId::new(),
             policy,
             now + chrono::Duration::minutes(5),
-        ).unwrap()
-    );
-    let second = f.store.evaluate_operational_alerts(
-        context,
-        f.user,
-        OperationId::new(),
-        policy,
-        now + chrono::Duration::minutes(5),
-    ).unwrap();
+        )
+        .unwrap();
     assert_eq!(second.created_alerts, 0);
     assert_eq!(second.existing_alerts, 7);
     assert_eq!(
