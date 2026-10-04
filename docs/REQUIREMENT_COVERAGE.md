@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
-Assessment date: 2026-10-02
-Authority baseline: public `main` commit `9d1d15d700c1235874929636a3eaabedecddb23a` plus the operational-alert change under review
-Working branch: `codex/operational-alerts-20261002`
+Assessment date: 2026-10-04
+Authority baseline: public `main` commit `c738405f38c5c37dea79e5121e877a1d496a9cac` plus the automatic operational-alert producer change under review
+Working branch: `codex/alert-producers-20261004`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -19,7 +19,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 03.7 | Atomic checkout | IMPLEMENTED — UNVERIFIED | `BEGIN IMMEDIATE` sale, lines, tenders, stock, receipt, print, audit, sync and idempotency transaction | Desktop end-to-end crash/lost-response test not run |
 | 03.8 | Append-only inventory | IMPLEMENTED — UNVERIFIED | `0011_inventory_operations.sql`; immutable movement/lot evidence; stock and cost projections; permissioned ledger rebuild with repair evidence | Cargo execution and broader production/BOM movement coverage remain |
 | 03.9 | Fail-closed authorization | IMPLEMENTED — UNVERIFIED | Permission allow-list checks and denial test | Full command surface is not yet implemented |
-| 03.10 | Tamper-evident audit | IMPLEMENTED — UNVERIFIED | Per-device SHA-256 link topology, immutable triggers, tamper/fork/order regressions and fail-closed append | Operational verification UI and automatic alert producer remain missing |
+| 03.10 | Tamper-evident audit | IMPLEMENTED — UNVERIFIED | Per-device SHA-256 link topology, immutable triggers, tamper/fork/order regressions and fail-closed append; automatic alert producers append audit evidence in the source transaction | Operational verification UI and full producer coverage remain missing |
 | 04 | Offline authority and policy | IN PROGRESS | Local SQLite authority, atomic bootstrap, offline Argon2 PIN login and local commands exist | Policy versions, bounded offline windows, broader stale-state controls and reconciliation are missing |
 | 05 | Trusted terminal model | IMPLEMENTED — UNVERIFIED | Durable identity/binding, expiring one-use enrollment, Windows Credential Manager secret custody, versioned permissioned rotation, suspend/revoke and attribution | Rust/Windows execution, heartbeat service and remote enrollment UX missing |
 | 06 | Action-bound manager approval | IMPLEMENTED — UNVERIFIED | HMAC binding, expiry and nonce consumption; void consumes exact approval | Production key custody and broader sensitive-action integration missing |
@@ -50,7 +50,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 31 | Production and waste | IMPLEMENTED — UNVERIFIED | Idempotent completion consumes actual components once, records expected/actual usage and weighted-average output cost; waste remains idempotent/costed | Cargo execution, planning UI and yield/variance reports remain |
 | 32 | Reporting and analytics | IN PROGRESS | Cash-session report and schema inputs exist | Most reports, definitions, pagination and exports missing |
 | 33 | Business date/store operations | IN PROGRESS | Bahrain close-hour business date and regression test | Checklists and full EOD orchestration missing |
-| 34 | Alert centre | IMPLEMENTED — UNVERIFIED | `0018_operational_alerts.sql`; payload-bound creation/transitions; legal persisted lifecycle; assignment; mandatory closure notes; immutable device/user event history; active-alert query; trusted permission and audit boundaries | Rust CI/runtime exercise, producer integration and management UI remain |
+| 34 | Alert centre | IMPLEMENTED — UNVERIFIED | `0018_operational_alerts.sql`; payload-bound creation/transitions; legal persisted lifecycle; assignment; mandatory closure notes; immutable device/user event history; active-alert query; trusted permission and audit boundaries; atomic active-alert-deduplicated producers for unknown barcode, checkout-created negative stock and cash-session close variance; GitHub Actions run `37227313354` passes all three jobs | Remaining producers (backup/sync/expiry/low-stock/overdue/settlement/security), management UI and Windows runtime exercise remain |
 | 35 | Synchronization | IMPLEMENTED — UNVERIFIED | Signed device envelopes; durable leases/backoff; payload-bound hub replay; immutable event acceptance; watermarks; `REQUIRES_REVIEW`; append-only manager resolution | Rust/multi-process tests, network adapter, deployed hub and reconciliation UI remain missing |
 | 36 | Terminal health | NOT STARTED | Device/diagnostic fields exist | Heartbeat collector and health UI missing |
 | 37 | AI back office | NOT STARTED | Safety/action/undo schema and architecture boundary documented | Tool registry, policy engine, previews, confirmations and providers missing |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Compile and execute the operational-alert workflow on CI, then integrate automatic alert producers and the management UI before beginning durable background jobs.
+Complete the remaining evidence-backed operational-alert producers and alert management UI, then implement the durable background-job worker required by backups, imports, OCR, AI batches and synchronization maintenance.
