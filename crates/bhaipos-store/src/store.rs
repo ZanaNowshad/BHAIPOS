@@ -354,19 +354,10 @@ pub struct BackgroundJobRecoveryResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackgroundJobFinishOutcome {
-    Succeeded {
-        result_json: String,
-    },
-    Failed {
-        error: String,
-        retryable: bool,
-    },
-    RequiresReview {
-        error: String,
-    },
-    Cancelled {
-        result_json: Option<String>,
-    },
+    Succeeded { result_json: String },
+    Failed { error: String, retryable: bool },
+    RequiresReview { error: String },
+    Cancelled { result_json: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

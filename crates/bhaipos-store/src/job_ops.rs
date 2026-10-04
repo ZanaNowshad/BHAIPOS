@@ -138,12 +138,9 @@ impl Store {
             "device_id": context.device_id,
             "lease_seconds": lease_seconds
         }))?);
-        if let Some(result) = self.load_background_job_operation(
-            context.tenant_id,
-            operation_id,
-            "CLAIM",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_background_job_operation(context.tenant_id, operation_id, "CLAIM", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -163,7 +160,17 @@ impl Store {
                 |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?)),
             )
             .optional()?;
-        let result = if let Some((job_id, job_type, payload_json, attempts, max_attempts, progress_current, progress_total, _cancellable)) = row {
+        let result = if let Some((
+            job_id,
+            job_type,
+            payload_json,
+            attempts,
+            max_attempts,
+            progress_current,
+            progress_total,
+            _cancellable,
+        )) = row
+        {
             let lease_token = Uuid::new_v4();
             let lease_expires_at = now
                 .checked_add_signed(chrono::Duration::seconds(lease_seconds))
@@ -250,21 +257,35 @@ impl Store {
         )? {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx,context.tenant_id,context.branch_id,user,"job.execute")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "job.execute",
+        )?;
         let current: Option<(i64, Option<i64>, i32)> = tx.query_row(
             "SELECT progress_current,progress_total,cancel_requested_at IS NOT NULL FROM background_jobs WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND state='RUNNING' AND lease_token=?4 AND lease_owner_device_id=?5 AND datetime(lease_expires_at)>=datetime(?6)",
             params![job_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),lease_token.to_string(),context.device_id.to_string(),now.to_rfc3339()],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
         ).optional()?;
         let Some((stored_progress, stored_total, cancel_requested)) = current else {
-            return Err(StoreError::Conflict("background job lease is stale or mismatched".into()));
+            return Err(StoreError::Conflict(
+                "background job lease is stale or mismatched".into(),
+            ));
         };
         if progress_current < stored_progress {
-            return Err(StoreError::Conflict("background job progress cannot move backward".into()));
+            return Err(StoreError::Conflict(
+                "background job progress cannot move backward".into(),
+            ));
         }
         if stored_total.is_some() && progress_total.is_some() && stored_total != progress_total {
-            return Err(StoreError::Conflict("background job progress total is immutable once set".into()));
+            return Err(StoreError::Conflict(
+                "background job progress total is immutable once set".into(),
+            ));
         }
         let effective_total = stored_total.or(progress_total);
         if effective_total.is_some_and(|total| progress_current > total) {
@@ -284,8 +305,27 @@ impl Store {
             cancel_requested: cancel_requested != 0,
             lease_expires_at: lease_expires_at.to_rfc3339(),
         };
-        Self::append_background_job_event(&tx,context,user,operation_id,job_id,"PROGRESS",Some("RUNNING"),"RUNNING",&serde_json::json!({"progress_current":progress_current,"progress_total":effective_total,"cancel_requested":result.cancel_requested}),now)?;
-        Self::record_background_job_operation(&tx,context.tenant_id,operation_id,"HEARTBEAT",&digest,&result,now)?;
+        Self::append_background_job_event(
+            &tx,
+            context,
+            user,
+            operation_id,
+            job_id,
+            "PROGRESS",
+            Some("RUNNING"),
+            "RUNNING",
+            &serde_json::json!({"progress_current":progress_current,"progress_total":effective_total,"cancel_requested":result.cancel_requested}),
+            now,
+        )?;
+        Self::record_background_job_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "HEARTBEAT",
+            &digest,
+            &result,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -302,14 +342,26 @@ impl Store {
         self.validate_local_session(context, user)?;
         let reason = reason.trim();
         if reason.is_empty() {
-            return Err(StoreError::Validation("job cancellation reason is required".into()));
+            return Err(StoreError::Validation(
+                "job cancellation reason is required".into(),
+            ));
         }
         let digest = sha256_hex(&serde_json::to_vec(&(job_id, reason))?);
-        if let Some(result) = self.load_background_job_operation(context.tenant_id,operation_id,"CANCEL",&digest)? {
+        if let Some(result) =
+            self.load_background_job_operation(context.tenant_id, operation_id, "CANCEL", &digest)?
+        {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx,context.tenant_id,context.branch_id,user,"job.manage")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "job.manage",
+        )?;
         let state: Option<(String, i32, i32)> = tx.query_row(
             "SELECT state,cancellable,cancel_requested_at IS NOT NULL FROM background_jobs WHERE id=?1 AND tenant_id=?2 AND branch_id=?3",
             params![job_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string()],
@@ -319,20 +371,58 @@ impl Store {
             return Err(StoreError::NotFound("background job"));
         };
         if cancellable == 0 {
-            return Err(StoreError::Conflict("background job is not cancellable".into()));
+            return Err(StoreError::Conflict(
+                "background job is not cancellable".into(),
+            ));
         }
         if already_requested != 0 || !matches!(previous_state.as_str(), "QUEUED" | "RUNNING") {
-            return Err(StoreError::Conflict("background job cannot be cancelled in its current state".into()));
+            return Err(StoreError::Conflict(
+                "background job cannot be cancelled in its current state".into(),
+            ));
         }
-        let (new_state,event_type) = if previous_state == "QUEUED" { ("CANCELLED","CANCELLED") } else { ("RUNNING","CANCEL_REQUESTED") };
+        let (new_state, event_type) = if previous_state == "QUEUED" {
+            ("CANCELLED", "CANCELLED")
+        } else {
+            ("RUNNING", "CANCEL_REQUESTED")
+        };
         tx.execute(
             "UPDATE background_jobs SET state=?2,cancel_requested_at=?3,cancel_requested_by_user_id=?4,cancel_reason=?5,completed_at=CASE WHEN ?2='CANCELLED' THEN ?3 ELSE NULL END,updated_at=?3 WHERE id=?1",
             params![job_id.to_string(),new_state,now.to_rfc3339(),user.to_string(),reason],
         )?;
-        Self::append_background_job_event(&tx,context,user,operation_id,job_id,event_type,Some(&previous_state),new_state,&serde_json::json!({"reason":reason}),now)?;
-        let result = Self::background_job_result_tx(&tx,context.tenant_id,context.branch_id,job_id)?;
-        Self::record_background_job_operation(&tx,context.tenant_id,operation_id,"CANCEL",&digest,&result,now)?;
-        Self::append_audit(&tx,context.tenant_id,context.device_id,user,"BACKGROUND_JOB_CANCELLATION_REQUESTED","background_job",&job_id.to_string(),&serde_json::to_string(&result)?,now)?;
+        Self::append_background_job_event(
+            &tx,
+            context,
+            user,
+            operation_id,
+            job_id,
+            event_type,
+            Some(&previous_state),
+            new_state,
+            &serde_json::json!({"reason":reason}),
+            now,
+        )?;
+        let result =
+            Self::background_job_result_tx(&tx, context.tenant_id, context.branch_id, job_id)?;
+        Self::record_background_job_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "CANCEL",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "BACKGROUND_JOB_CANCELLATION_REQUESTED",
+            "background_job",
+            &job_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -349,19 +439,35 @@ impl Store {
     ) -> Result<BackgroundJobResult, StoreError> {
         self.validate_local_session(context, user)?;
         let normalized_outcome = Self::normalize_background_job_outcome(outcome)?;
-        let digest = sha256_hex(&serde_json::to_vec(&(job_id,lease_token,&normalized_outcome))?);
-        if let Some(result) = self.load_background_job_operation(context.tenant_id,operation_id,"FINISH",&digest)? {
+        let digest = sha256_hex(&serde_json::to_vec(&(
+            job_id,
+            lease_token,
+            &normalized_outcome,
+        ))?);
+        if let Some(result) =
+            self.load_background_job_operation(context.tenant_id, operation_id, "FINISH", &digest)?
+        {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx,context.tenant_id,context.branch_id,user,"job.execute")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "job.execute",
+        )?;
         let held: Option<(i64,i64,i32)> = tx.query_row(
             "SELECT attempts,max_attempts,cancel_requested_at IS NOT NULL FROM background_jobs WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND state='RUNNING' AND lease_token=?4 AND lease_owner_device_id=?5 AND datetime(lease_expires_at)>=datetime(?6)",
             params![job_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),lease_token.to_string(),context.device_id.to_string(),now.to_rfc3339()],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
         ).optional()?;
-        let Some((attempts,max_attempts,cancel_requested)) = held else {
-            return Err(StoreError::Conflict("background job lease is stale or mismatched".into()));
+        let Some((attempts, max_attempts, cancel_requested)) = held else {
+            return Err(StoreError::Conflict(
+                "background job lease is stale or mismatched".into(),
+            ));
         };
         if cancel_requested != 0
             && !matches!(
@@ -373,35 +479,107 @@ impl Store {
                 "cancelled background job must acknowledge cancellation".into(),
             ));
         }
-        let (state,event_type,result_json,error,retry_after,completed_at) = match &normalized_outcome {
-            BackgroundJobFinishOutcome::Succeeded { result_json } => {
-                if cancel_requested != 0 {
-                    return Err(StoreError::Conflict("cancelled background job cannot be marked successful".into()));
+        let (state, event_type, result_json, error, retry_after, completed_at) =
+            match &normalized_outcome {
+                BackgroundJobFinishOutcome::Succeeded { result_json } => {
+                    if cancel_requested != 0 {
+                        return Err(StoreError::Conflict(
+                            "cancelled background job cannot be marked successful".into(),
+                        ));
+                    }
+                    (
+                        "SUCCEEDED",
+                        "SUCCEEDED",
+                        Some(result_json.clone()),
+                        None,
+                        None,
+                        Some(now.to_rfc3339()),
+                    )
                 }
-                ("SUCCEEDED","SUCCEEDED",Some(result_json.clone()),None,None,Some(now.to_rfc3339()))
-            }
-            BackgroundJobFinishOutcome::Failed { error, retryable } if *retryable && attempts < max_attempts => {
-                let exponent = u32::try_from(attempts.clamp(1,8)).unwrap_or(8);
-                let delay_seconds = (1_i64 << exponent).min(300);
-                ("QUEUED","RETRY_SCHEDULED",None,Some(error.clone()),Some((now+chrono::Duration::seconds(delay_seconds)).to_rfc3339()),None)
-            }
-            BackgroundJobFinishOutcome::Failed { error, .. } => ("FAILED","FAILED",None,Some(error.clone()),None,Some(now.to_rfc3339())),
-            BackgroundJobFinishOutcome::RequiresReview { error } => ("REQUIRES_REVIEW","REQUIRES_REVIEW",None,Some(error.clone()),None,Some(now.to_rfc3339())),
-            BackgroundJobFinishOutcome::Cancelled { result_json } => {
-                if cancel_requested == 0 {
-                    return Err(StoreError::Conflict("background job cancellation was not requested".into()));
+                BackgroundJobFinishOutcome::Failed { error, retryable }
+                    if *retryable && attempts < max_attempts =>
+                {
+                    let exponent = u32::try_from(attempts.clamp(1, 8)).unwrap_or(8);
+                    let delay_seconds = (1_i64 << exponent).min(300);
+                    (
+                        "QUEUED",
+                        "RETRY_SCHEDULED",
+                        None,
+                        Some(error.clone()),
+                        Some((now + chrono::Duration::seconds(delay_seconds)).to_rfc3339()),
+                        None,
+                    )
                 }
-                ("CANCELLED","CANCELLED",result_json.clone(),None,None,Some(now.to_rfc3339()))
-            }
-        };
+                BackgroundJobFinishOutcome::Failed { error, .. } => (
+                    "FAILED",
+                    "FAILED",
+                    None,
+                    Some(error.clone()),
+                    None,
+                    Some(now.to_rfc3339()),
+                ),
+                BackgroundJobFinishOutcome::RequiresReview { error } => (
+                    "REQUIRES_REVIEW",
+                    "REQUIRES_REVIEW",
+                    None,
+                    Some(error.clone()),
+                    None,
+                    Some(now.to_rfc3339()),
+                ),
+                BackgroundJobFinishOutcome::Cancelled { result_json } => {
+                    if cancel_requested == 0 {
+                        return Err(StoreError::Conflict(
+                            "background job cancellation was not requested".into(),
+                        ));
+                    }
+                    (
+                        "CANCELLED",
+                        "CANCELLED",
+                        result_json.clone(),
+                        None,
+                        None,
+                        Some(now.to_rfc3339()),
+                    )
+                }
+            };
         tx.execute(
             "UPDATE background_jobs SET state=?2,result_json=?3,error_text=?4,retry_after=?5,lease_token=NULL,lease_owner_device_id=NULL,lease_expires_at=NULL,completed_at=?6,updated_at=?7 WHERE id=?1 AND state='RUNNING' AND lease_token=?8",
             params![job_id.to_string(),state,result_json,error,retry_after,completed_at,now.to_rfc3339(),lease_token.to_string()],
         )?;
-        Self::append_background_job_event(&tx,context,user,operation_id,job_id,event_type,Some("RUNNING"),state,&serde_json::json!({"outcome":normalized_outcome,"attempt":attempts,"retry_after":retry_after}),now)?;
-        let result = Self::background_job_result_tx(&tx,context.tenant_id,context.branch_id,job_id)?;
-        Self::record_background_job_operation(&tx,context.tenant_id,operation_id,"FINISH",&digest,&result,now)?;
-        Self::append_audit(&tx,context.tenant_id,context.device_id,user,"BACKGROUND_JOB_FINISHED","background_job",&job_id.to_string(),&serde_json::to_string(&result)?,now)?;
+        Self::append_background_job_event(
+            &tx,
+            context,
+            user,
+            operation_id,
+            job_id,
+            event_type,
+            Some("RUNNING"),
+            state,
+            &serde_json::json!({"outcome":normalized_outcome,"attempt":attempts,"retry_after":retry_after}),
+            now,
+        )?;
+        let result =
+            Self::background_job_result_tx(&tx, context.tenant_id, context.branch_id, job_id)?;
+        Self::record_background_job_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "FINISH",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "BACKGROUND_JOB_FINISHED",
+            "background_job",
+            &job_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -414,40 +592,121 @@ impl Store {
         now: DateTime<Utc>,
     ) -> Result<BackgroundJobRecoveryResult, StoreError> {
         self.validate_local_session(context, user)?;
-        let digest = sha256_hex(&serde_json::to_vec(&(context.branch_id,context.device_id))?);
-        if let Some(result) = self.load_background_job_operation(context.tenant_id,operation_id,"RECOVER",&digest)? {
+        let digest = sha256_hex(&serde_json::to_vec(&(
+            context.branch_id,
+            context.device_id,
+        ))?);
+        if let Some(result) =
+            self.load_background_job_operation(context.tenant_id, operation_id, "RECOVER", &digest)?
+        {
             return Ok(result);
         }
-        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_permission(&tx,context.tenant_id,context.branch_id,user,"job.manage")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "job.manage",
+        )?;
         let expired = {
             let mut statement = tx.prepare(
                 "SELECT id,attempts,max_attempts,cancel_requested_at IS NOT NULL FROM background_jobs WHERE tenant_id=?1 AND branch_id=?2 AND state='RUNNING' AND datetime(lease_expires_at)<datetime(?3) ORDER BY lease_expires_at,id",
             )?;
-            let rows = statement.query_map(params![context.tenant_id.to_string(),context.branch_id.to_string(),now.to_rfc3339()],|row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,i32>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
+            let rows = statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        now.to_rfc3339()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i32>(3)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
             rows
         };
-        let mut result = BackgroundJobRecoveryResult { requeued: 0, failed: 0, cancelled: 0 };
-        for (job_id,attempts,max_attempts,cancel_requested) in expired {
-            let parsed = Uuid::parse_str(&job_id).map_err(|_| StoreError::Validation("invalid background job identity".into()))?;
-            let (state,event_type,error,retry_after,completed_at) = if cancel_requested != 0 {
+        let mut result = BackgroundJobRecoveryResult {
+            requeued: 0,
+            failed: 0,
+            cancelled: 0,
+        };
+        for (job_id, attempts, max_attempts, cancel_requested) in expired {
+            let parsed = Uuid::parse_str(&job_id)
+                .map_err(|_| StoreError::Validation("invalid background job identity".into()))?;
+            let (state, event_type, error, retry_after, completed_at) = if cancel_requested != 0 {
                 result.cancelled += 1;
-                ("CANCELLED","LEASE_EXPIRED_CANCELLED",None,None,Some(now.to_rfc3339()))
+                (
+                    "CANCELLED",
+                    "LEASE_EXPIRED_CANCELLED",
+                    None,
+                    None,
+                    Some(now.to_rfc3339()),
+                )
             } else if attempts < max_attempts {
                 result.requeued += 1;
-                ("QUEUED","LEASE_EXPIRED_REQUEUED",Some("Recovered after expired worker lease"),Some(now.to_rfc3339()),None)
+                (
+                    "QUEUED",
+                    "LEASE_EXPIRED_REQUEUED",
+                    Some("Recovered after expired worker lease"),
+                    Some(now.to_rfc3339()),
+                    None,
+                )
             } else {
                 result.failed += 1;
-                ("FAILED","LEASE_EXPIRED_FAILED",Some("Worker lease expired after maximum attempts"),None,Some(now.to_rfc3339()))
+                (
+                    "FAILED",
+                    "LEASE_EXPIRED_FAILED",
+                    Some("Worker lease expired after maximum attempts"),
+                    None,
+                    Some(now.to_rfc3339()),
+                )
             };
             tx.execute(
                 "UPDATE background_jobs SET state=?2,error_text=?3,retry_after=?4,lease_token=NULL,lease_owner_device_id=NULL,lease_expires_at=NULL,completed_at=?5,updated_at=?6 WHERE id=?1 AND state='RUNNING'",
                 params![job_id,state,error,retry_after,completed_at,now.to_rfc3339()],
             )?;
-            Self::append_background_job_event(&tx,context,user,operation_id,parsed,event_type,Some("RUNNING"),state,&serde_json::json!({"attempt":attempts,"max_attempts":max_attempts}),now)?;
+            Self::append_background_job_event(
+                &tx,
+                context,
+                user,
+                operation_id,
+                parsed,
+                event_type,
+                Some("RUNNING"),
+                state,
+                &serde_json::json!({"attempt":attempts,"max_attempts":max_attempts}),
+                now,
+            )?;
         }
-        Self::record_background_job_operation(&tx,context.tenant_id,operation_id,"RECOVER",&digest,&result,now)?;
-        Self::append_audit(&tx,context.tenant_id,context.device_id,user,"BACKGROUND_JOBS_RECOVERED","branch",&context.branch_id.to_string(),&serde_json::to_string(&result)?,now)?;
+        Self::record_background_job_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "RECOVER",
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "BACKGROUND_JOBS_RECOVERED",
+            "branch",
+            &context.branch_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -459,25 +718,84 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<BackgroundJobSummary>, StoreError> {
         self.validate_local_session(context, user)?;
-        Self::assert_permission_conn(&self.conn,context.tenant_id,context.branch_id,user,"job.view")?;
+        Self::assert_permission_conn(
+            &self.conn,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "job.view",
+        )?;
         if limit == 0 || limit > 500 {
-            return Err(StoreError::Validation("job list limit must be between 1 and 500".into()));
+            return Err(StoreError::Validation(
+                "job list limit must be between 1 and 500".into(),
+            ));
         }
         let mut statement = self.conn.prepare(
             "SELECT id,job_type,state,progress_current,progress_total,attempts,max_attempts,cancellable,cancel_requested_at IS NOT NULL,retry_after,error_text,created_at,updated_at FROM background_jobs WHERE tenant_id=?1 AND branch_id=?2 ORDER BY updated_at DESC,id LIMIT ?3",
         )?;
-        let rows = statement.query_map(params![context.tenant_id.to_string(),context.branch_id.to_string(),limit as i64],|row| {
-            Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?,row.get::<_,Option<i64>>(4)?,row.get::<_,i64>(5)?,row.get::<_,i64>(6)?,row.get::<_,i32>(7)?,row.get::<_,i32>(8)?,row.get::<_,Option<String>>(9)?,row.get::<_,Option<String>>(10)?,row.get::<_,String>(11)?,row.get::<_,String>(12)?))
-        })?.collect::<Result<Vec<_>,_>>()?;
-        rows.into_iter().map(|(id,job_type,state,progress_current,progress_total,attempts,max_attempts,cancellable,cancel_requested,retry_after,error,created_at,updated_at)| {
-            Ok(BackgroundJobSummary {
-                job_id: Uuid::parse_str(&id).map_err(|_| StoreError::Validation("invalid background job identity".into()))?,
-                job_type,state,progress_current,progress_total,attempts,max_attempts,
-                cancellable: cancellable != 0,
-                cancel_requested: cancel_requested != 0,
-                retry_after,error,created_at,updated_at,
-            })
-        }).collect()
+        let rows = statement
+            .query_map(
+                params![
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    limit as i64
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i32>(7)?,
+                        row.get::<_, i32>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    job_type,
+                    state,
+                    progress_current,
+                    progress_total,
+                    attempts,
+                    max_attempts,
+                    cancellable,
+                    cancel_requested,
+                    retry_after,
+                    error,
+                    created_at,
+                    updated_at,
+                )| {
+                    Ok(BackgroundJobSummary {
+                        job_id: Uuid::parse_str(&id).map_err(|_| {
+                            StoreError::Validation("invalid background job identity".into())
+                        })?,
+                        job_type,
+                        state,
+                        progress_current,
+                        progress_total,
+                        attempts,
+                        max_attempts,
+                        cancellable: cancellable != 0,
+                        cancel_requested: cancel_requested != 0,
+                        retry_after,
+                        error,
+                        created_at,
+                        updated_at,
+                    })
+                },
+            )
+            .collect()
     }
 
     fn normalize_background_job_outcome(
@@ -486,20 +804,40 @@ impl Store {
         match outcome {
             BackgroundJobFinishOutcome::Succeeded { result_json } => {
                 let value: serde_json::Value = serde_json::from_str(&result_json)?;
-                Ok(BackgroundJobFinishOutcome::Succeeded { result_json: serde_json::to_string(&value)? })
+                Ok(BackgroundJobFinishOutcome::Succeeded {
+                    result_json: serde_json::to_string(&value)?,
+                })
             }
             BackgroundJobFinishOutcome::Failed { error, retryable } => {
                 let error = error.trim();
-                if error.is_empty() { return Err(StoreError::Validation("job failure reason is required".into())); }
-                Ok(BackgroundJobFinishOutcome::Failed { error: error.into(), retryable })
+                if error.is_empty() {
+                    return Err(StoreError::Validation(
+                        "job failure reason is required".into(),
+                    ));
+                }
+                Ok(BackgroundJobFinishOutcome::Failed {
+                    error: error.into(),
+                    retryable,
+                })
             }
             BackgroundJobFinishOutcome::RequiresReview { error } => {
                 let error = error.trim();
-                if error.is_empty() { return Err(StoreError::Validation("job review reason is required".into())); }
-                Ok(BackgroundJobFinishOutcome::RequiresReview { error: error.into() })
+                if error.is_empty() {
+                    return Err(StoreError::Validation(
+                        "job review reason is required".into(),
+                    ));
+                }
+                Ok(BackgroundJobFinishOutcome::RequiresReview {
+                    error: error.into(),
+                })
             }
             BackgroundJobFinishOutcome::Cancelled { result_json } => {
-                let result_json = result_json.map(|json| serde_json::from_str::<serde_json::Value>(&json).and_then(|value| serde_json::to_string(&value))).transpose()?;
+                let result_json = result_json
+                    .map(|json| {
+                        serde_json::from_str::<serde_json::Value>(&json)
+                            .and_then(|value| serde_json::to_string(&value))
+                    })
+                    .transpose()?;
                 Ok(BackgroundJobFinishOutcome::Cancelled { result_json })
             }
         }
@@ -507,7 +845,9 @@ impl Store {
 
     fn validate_background_job_lease_seconds(value: i64) -> Result<(), StoreError> {
         if !(30..=3_600).contains(&value) {
-            return Err(StoreError::Validation("job lease must be between 30 and 3600 seconds".into()));
+            return Err(StoreError::Validation(
+                "job lease must be between 30 and 3600 seconds".into(),
+            ));
         }
         Ok(())
     }
@@ -539,8 +879,14 @@ impl Store {
         ).optional()?;
         match stored {
             None => Ok(None),
-            Some((stored_action,stored_digest,json)) if stored_action==action && stored_digest==digest => Ok(Some(serde_json::from_str(&json)?)),
-            Some(_) => Err(StoreError::Conflict("background job operation ID reused with different action or payload".into())),
+            Some((stored_action, stored_digest, json))
+                if stored_action == action && stored_digest == digest =>
+            {
+                Ok(Some(serde_json::from_str(&json)?))
+            }
+            Some(_) => Err(StoreError::Conflict(
+                "background job operation ID reused with different action or payload".into(),
+            )),
         }
     }
 
