@@ -619,6 +619,22 @@ pub struct OperationalAlertSummary {
     pub created_at: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalAlertEvaluationPolicy {
+    pub sync_delay_minutes: i64,
+    pub terminal_offline_minutes: i64,
+    pub expiry_warning_days: i64,
+    pub authentication_failure_threshold: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalAlertEvaluationResult {
+    pub operation_id: OperationId,
+    pub created_alerts: usize,
+    pub existing_alerts: usize,
+    pub evaluated_at: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct VoidSaleRequest {
     pub tenant_id: TenantId,

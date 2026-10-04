@@ -3888,3 +3888,126 @@ fn operational_alerts_are_idempotent_state_bound_and_append_evidenced() {
         4
     );
 }
+
+#[test]
+fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
+    let mut f = fixture();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    // At 22:00 UTC the Bahrain calendar date is already 2026-10-05.
+    let now = t("2026-10-04T22:00:00Z");
+    let second_device = DeviceId::new();
+    f.store
+        .create_device(
+            second_device,
+            f.tenant,
+            f.branch,
+            "POS-02",
+            "second-device-secret-0123456789",
+            t("2026-09-01T00:00:00Z"),
+        )
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE devices SET last_heartbeat_at=?1 WHERE id=?2",
+            params!["2026-10-04T15:00:00Z", second_device.to_string()],
+        )
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "INSERT INTO reorder_policies(tenant_id,branch_id,product_id,reorder_point_milli,target_stock_milli,active) VALUES(?1,?2,?3,12000,20000,1)",
+            params![f.tenant.to_string(), f.branch.to_string(), f.product.to_string()],
+        )
+        .unwrap();
+    let lot = Uuid::new_v4();
+    f.store.connection().execute(
+        "INSERT INTO inventory_lots(id,tenant_id,product_id,lot_number,expires_on,status,unit_cost_fils,received_at) VALUES(?1,?2,?3,'EXP-1','2026-10-06','ACTIVE',700,?4)",
+        params![lot.to_string(),f.tenant.to_string(),f.product.to_string(),now.to_rfc3339()],
+    ).unwrap();
+    f.store.connection().execute(
+        "INSERT INTO lot_balances(tenant_id,branch_id,centre_id,lot_id,quantity_milli) VALUES(?1,?2,?3,?4,1000)",
+        params![f.tenant.to_string(),f.branch.to_string(),f.centre.to_string(),lot.to_string()],
+    ).unwrap();
+    f.store.connection().execute(
+        "INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,attempts,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'product',?6,'UPSERT','{}','RETRYING',2,'2026-10-04T14:00:00Z','2026-10-04T14:00:00Z')",
+        params![Uuid::new_v4().to_string(),f.tenant.to_string(),f.branch.to_string(),f.device.to_string(),OperationId::new().to_string(),f.product.to_string()],
+    ).unwrap();
+    let supplier: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT id FROM suppliers WHERE tenant_id=?1 LIMIT 1",
+            params![f.tenant.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let invoice = Uuid::new_v4();
+    f.store.connection().execute(
+        "INSERT INTO supplier_invoices(id,tenant_id,branch_id,supplier_id,invoice_number,invoice_date,due_date,subtotal_fils,tax_fils,total_fils,amount_paid_fils,status,created_at) VALUES(?1,?2,?3,?4,'OVERDUE-1','2026-09-01','2026-10-04',10000,1000,11000,0,'OPEN',?5)",
+        params![invoice.to_string(),f.tenant.to_string(),f.branch.to_string(),supplier,now.to_rfc3339()],
+    ).unwrap();
+    let backup = Uuid::new_v4();
+    f.store.connection().execute(
+        "INSERT INTO backup_records(id,tenant_id,branch_id,backup_type,storage_path,sha256,schema_version,app_version,state,integrity_state,created_at) VALUES(?1,?2,?3,'SCHEDULED','backup.db',?4,'0018','0.1.0','FAILED','FAILED',?5)",
+        params![backup.to_string(),f.tenant.to_string(),f.branch.to_string(),"0".repeat(64),now.to_rfc3339()],
+    ).unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE users SET failed_attempts=4 WHERE id=?1",
+            params![f.user.to_string()],
+        )
+        .unwrap();
+
+    let policy = bhaipos_store::OperationalAlertEvaluationPolicy {
+        sync_delay_minutes: 60,
+        terminal_offline_minutes: 60,
+        expiry_warning_days: 7,
+        authentication_failure_threshold: 3,
+    };
+    let operation_id = OperationId::new();
+    let first = f
+        .store
+        .evaluate_operational_alerts(context, f.user, operation_id, policy, now)
+        .unwrap();
+    assert_eq!(first.created_alerts, 7);
+    assert_eq!(first.existing_alerts, 0);
+    assert_eq!(
+        first,
+        f.store
+            .evaluate_operational_alerts(
+                context,
+                f.user,
+                operation_id,
+                policy,
+                now + chrono::Duration::minutes(5),
+            )
+            .unwrap()
+    );
+    let second = f
+        .store
+        .evaluate_operational_alerts(
+            context,
+            f.user,
+            OperationId::new(),
+            policy,
+            now + chrono::Duration::minutes(5),
+        )
+        .unwrap();
+    assert_eq!(second.created_alerts, 0);
+    assert_eq!(second.existing_alerts, 7);
+    assert_eq!(
+        f.store.connection().query_row(
+            "SELECT COUNT(*) FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type IN ('LOW_STOCK','EXPIRY','SYNC_DELAY','TERMINAL_OFFLINE','OVERDUE_SUPPLIER_INVOICE','BACKUP_FAILURE','SECURITY_EVENT')",
+            params![f.tenant.to_string(),f.branch.to_string()],
+            |row| row.get::<_,i64>(0),
+        ).unwrap(),
+        7
+    );
+}

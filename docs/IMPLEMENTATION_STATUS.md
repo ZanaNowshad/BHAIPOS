@@ -44,6 +44,8 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `37238619386` passes Rust formatting, strict Clippy, 10 core tests, all 52 store invariant tests, desktop Rust compilation, desktop TypeScript checking and the production UI build for the evidence-driven operational-alert evaluator.
+- A permissioned, payload-bound evaluation operation atomically produces active deduplicated alerts from low-stock, lot-expiry, delayed-sync, offline-terminal, overdue-supplier-invoice, failed-backup and repeated-authentication-failure evidence. Replays return the original result; new evaluations report existing alerts without flooding. Calendar-date conditions use Bahrain local time while duration cutoffs remain UTC.
 - GitHub Actions run `37227313354` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the automatic operational-alert producer change.
 - Unknown-barcode scans atomically persist scan evidence and one active deduplicated alert; repeated scans update evidence without alert flooding.
 - Checkout atomically raises a high-severity negative-stock alert when its inventory consequence makes the affected product/centre balance negative.
@@ -99,7 +101,7 @@ Status vocabulary:
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; remaining operational-alert producers; background jobs; feature flags; backups/restores; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; background jobs; feature flags; backups/restores; diagnostics/update records.
 
 ## Runtime components still not implemented
 

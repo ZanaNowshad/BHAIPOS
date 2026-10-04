@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
 Assessment date: 2026-10-04
-Authority baseline: public `main` commit `c738405f38c5c37dea79e5121e877a1d496a9cac` plus the automatic operational-alert producer change under review
-Working branch: `codex/alert-producers-20261004`
+Authority baseline: public `main` commit `be81a54a595f1ab3f03f250e8e2169ddf82fa348` plus the evidence-driven operational-alert evaluator under review
+Working branch: `codex/remaining-alert-producers-20261004`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -50,7 +50,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 31 | Production and waste | IMPLEMENTED — UNVERIFIED | Idempotent completion consumes actual components once, records expected/actual usage and weighted-average output cost; waste remains idempotent/costed | Cargo execution, planning UI and yield/variance reports remain |
 | 32 | Reporting and analytics | IN PROGRESS | Cash-session report and schema inputs exist | Most reports, definitions, pagination and exports missing |
 | 33 | Business date/store operations | IN PROGRESS | Bahrain close-hour business date and regression test | Checklists and full EOD orchestration missing |
-| 34 | Alert centre | IMPLEMENTED — UNVERIFIED | `0018_operational_alerts.sql`; payload-bound creation/transitions; legal persisted lifecycle; assignment; mandatory closure notes; immutable device/user event history; active-alert query; trusted permission and audit boundaries; atomic active-alert-deduplicated producers for unknown barcode, checkout-created negative stock and cash-session close variance; permission-aware Admin Alert Centre with current-user assignment at the trusted boundary; GitHub Actions runs `37227313354` and `37228681820` pass all three jobs | Remaining producers (backup/sync/expiry/low-stock/overdue/settlement/security) and Windows runtime exercise remain |
+| 34 | Alert centre | IN PROGRESS | `0018_operational_alerts.sql`; payload-bound creation/transitions; legal persisted lifecycle; assignment; mandatory closure notes; immutable device/user event history; active-alert query; trusted permission and audit boundaries; atomic active-alert-deduplicated producers for unknown barcode, negative stock and cash variance; evidence-driven evaluator for low stock, expiry, sync delay, offline terminals, overdue supplier invoices, backup failure and authentication risk; Bahrain-local calendar dates; permission-aware Admin Alert Centre; GitHub Actions runs `37227313354`, `37228681820` and `37238619386` pass all three jobs | Overdue-customer-credit and settlement-discrepancy producers depend on completing their authoritative domains; clean Windows runtime exercise remains |
 | 35 | Synchronization | IMPLEMENTED — UNVERIFIED | Signed device envelopes; durable leases/backoff; payload-bound hub replay; immutable event acceptance; watermarks; `REQUIRES_REVIEW`; append-only manager resolution | Rust/multi-process tests, network adapter, deployed hub and reconciliation UI remain missing |
 | 36 | Terminal health | NOT STARTED | Device/diagnostic fields exist | Heartbeat collector and health UI missing |
 | 37 | AI back office | NOT STARTED | Safety/action/undo schema and architecture boundary documented | Tool registry, policy engine, previews, confirmations and providers missing |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Complete the remaining evidence-backed operational-alert producers, then implement the durable background-job worker required by backups, imports, OCR, AI batches and synchronization maintenance.
+Implement the durable background-job worker required by backups, imports, OCR, AI batches and synchronization maintenance, with leases, progress, cancellation and interruption recovery.
