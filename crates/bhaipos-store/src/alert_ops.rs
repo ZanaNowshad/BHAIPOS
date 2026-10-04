@@ -425,7 +425,7 @@ impl Store {
             let mut statement = tx.prepare(
                 "SELECT p.id,p.name,COALESCE(SUM(sl.quantity_milli),0),rp.reorder_point_milli FROM reorder_policies rp JOIN products p ON p.id=rp.product_id AND p.tenant_id=rp.tenant_id LEFT JOIN stock_levels sl ON sl.tenant_id=rp.tenant_id AND sl.branch_id=rp.branch_id AND sl.product_id=rp.product_id WHERE rp.tenant_id=?1 AND rp.branch_id=?2 AND rp.active=1 AND rp.reorder_point_milli IS NOT NULL AND p.status='ACTIVE' GROUP BY p.id,p.name,rp.reorder_point_milli HAVING COALESCE(SUM(sl.quantity_milli),0)<=rp.reorder_point_milli",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![context.tenant_id.to_string(), context.branch_id.to_string()],
                     |row| {
@@ -437,13 +437,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let expiring_lots = {
             let mut statement = tx.prepare(
                 "SELECT il.id,p.name,il.expires_on,SUM(lb.quantity_milli) FROM inventory_lots il JOIN products p ON p.id=il.product_id AND p.tenant_id=il.tenant_id JOIN lot_balances lb ON lb.lot_id=il.id AND lb.tenant_id=il.tenant_id WHERE il.tenant_id=?1 AND lb.branch_id=?2 AND il.status='ACTIVE' AND il.expires_on IS NOT NULL AND date(il.expires_on)<=date(?3) GROUP BY il.id,p.name,il.expires_on HAVING SUM(lb.quantity_milli)>0",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -459,13 +460,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let delayed_sync = {
             let mut statement = tx.prepare(
                 "SELECT device_id,MIN(updated_at),COUNT(*) FROM sync_queue WHERE tenant_id=?1 AND branch_id=?2 AND state IN ('PENDING','SENDING','RETRYING') AND datetime(updated_at)<datetime(?3) GROUP BY device_id",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -480,13 +482,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let offline_terminals = {
             let mut statement = tx.prepare(
                 "SELECT id,label,last_heartbeat_at,created_at FROM devices WHERE tenant_id=?1 AND branch_id=?2 AND status='ACTIVE' AND id!=?3 AND datetime(COALESCE(last_heartbeat_at,created_at))<datetime(?4)",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -503,13 +506,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let overdue_invoices = {
             let mut statement = tx.prepare(
                 "SELECT si.id,si.invoice_number,s.name,si.due_date,si.total_fils-si.amount_paid_fils FROM supplier_invoices si JOIN suppliers s ON s.id=si.supplier_id AND s.tenant_id=si.tenant_id WHERE si.tenant_id=?1 AND si.branch_id=?2 AND si.status IN ('OPEN','PARTIALLY_PAID') AND si.due_date IS NOT NULL AND date(si.due_date)<date(?3) AND si.total_fils>si.amount_paid_fils",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -526,13 +530,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let failed_backups = {
             let mut statement = tx.prepare(
                 "SELECT id,backup_type,state,integrity_state,created_at FROM backup_records WHERE tenant_id=?1 AND (branch_id=?2 OR branch_id IS NULL) AND (state='FAILED' OR integrity_state IN ('FAILED','CORRUPT'))",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![context.tenant_id.to_string(), context.branch_id.to_string()],
                     |row| {
@@ -545,13 +550,14 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let authentication_risks = {
             let mut statement = tx.prepare(
                 "SELECT u.id,u.display_name,u.failed_attempts,u.status FROM users u WHERE u.tenant_id=?1 AND u.failed_attempts>=?2 AND u.status IN ('ACTIVE','LOCKED') AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3))",
             )?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         context.tenant_id.to_string(),
@@ -567,7 +573,8 @@ impl Store {
                         ))
                     },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
 
         let mut created_alerts = 0usize;
