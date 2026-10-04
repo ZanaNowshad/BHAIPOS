@@ -5,16 +5,7 @@
 
 use super::*;
 
-type ClaimableBackgroundJobRow = (
-    String,
-    String,
-    String,
-    i64,
-    i64,
-    i64,
-    Option<i64>,
-    i32,
-);
+type ClaimableBackgroundJobRow = (String, String, String, i64, i64, i64, Option<i64>, i32);
 
 impl Store {
     pub fn enqueue_background_job(
