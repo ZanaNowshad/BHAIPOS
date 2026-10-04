@@ -5,6 +5,17 @@
 
 use super::*;
 
+type ClaimableBackgroundJobRow = (
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    i32,
+);
+
 impl Store {
     pub fn enqueue_background_job(
         &mut self,
@@ -153,7 +164,7 @@ impl Store {
             user,
             "job.execute",
         )?;
-        let row: Option<(String, String, String, i64, i64, i64, Option<i64>, i32)> = tx
+        let row: Option<ClaimableBackgroundJobRow> = tx
             .query_row(
                 "SELECT id,job_type,payload_json,attempts,max_attempts,progress_current,progress_total,cancellable FROM background_jobs WHERE tenant_id=?1 AND branch_id=?2 AND state='QUEUED' AND datetime(COALESCE(retry_after,not_before,created_at))<=datetime(?3) ORDER BY datetime(COALESCE(retry_after,not_before,created_at)),created_at,id LIMIT 1",
                 params![context.tenant_id.to_string(), context.branch_id.to_string(), now.to_rfc3339()],
