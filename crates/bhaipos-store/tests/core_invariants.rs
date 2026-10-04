@@ -4,10 +4,9 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, CashMovementKind,
-    CashMovementRequest, CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest,
-    NewProduct, PaymentInput, RefundLineInput, RefundRequest, Store, StoreError,
-    SyncDeliveryOutcome,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, CashMovementKind, CashMovementRequest,
+    CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest, NewProduct, PaymentInput,
+    RefundLineInput, RefundRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;

@@ -20,6 +20,7 @@ UPGRADE_0015=ROOT/'migrations/0015_expense_operations.sql'
 UPGRADE_0016=ROOT/'migrations/0016_delivery_courier_operations.sql'
 UPGRADE_0017=ROOT/'migrations/0017_attendance_operations.sql'
 UPGRADE_0018=ROOT/'migrations/0018_operational_alerts.sql'
+UPGRADE_0019=ROOT/'migrations/0019_background_jobs.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -56,6 +57,27 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0016.read_text())
         con.executescript(UPGRADE_0017.read_text())
         con.executescript(UPGRADE_0018.read_text())
+        job_cols={r[1] for r in con.execute('PRAGMA table_info(background_jobs)')}
+        job_upgrades={
+            'origin_device_id':'ALTER TABLE background_jobs ADD COLUMN origin_device_id TEXT REFERENCES devices(id)',
+            'operation_id':'ALTER TABLE background_jobs ADD COLUMN operation_id TEXT',
+            'request_sha256':'ALTER TABLE background_jobs ADD COLUMN request_sha256 TEXT',
+            'attempts':'ALTER TABLE background_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
+            'max_attempts':'ALTER TABLE background_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3',
+            'not_before':'ALTER TABLE background_jobs ADD COLUMN not_before TEXT',
+            'lease_token':'ALTER TABLE background_jobs ADD COLUMN lease_token TEXT',
+            'lease_owner_device_id':'ALTER TABLE background_jobs ADD COLUMN lease_owner_device_id TEXT REFERENCES devices(id)',
+            'lease_expires_at':'ALTER TABLE background_jobs ADD COLUMN lease_expires_at TEXT',
+            'cancel_requested_at':'ALTER TABLE background_jobs ADD COLUMN cancel_requested_at TEXT',
+            'cancel_requested_by_user_id':'ALTER TABLE background_jobs ADD COLUMN cancel_requested_by_user_id TEXT REFERENCES users(id)',
+            'cancel_reason':'ALTER TABLE background_jobs ADD COLUMN cancel_reason TEXT',
+            'retry_after':'ALTER TABLE background_jobs ADD COLUMN retry_after TEXT',
+            'started_at':'ALTER TABLE background_jobs ADD COLUMN started_at TEXT',
+            'completed_at':'ALTER TABLE background_jobs ADD COLUMN completed_at TEXT',
+        }
+        for col,ddl in job_upgrades.items():
+            if col not in job_cols: con.execute(ddl)
+        con.executescript(UPGRADE_0019.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -105,7 +127,7 @@ critical={
     'expense_operation_results','expense_events','expense_payments',
     'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations',
     'employee_operation_results','attendance_operation_results','attendance_sessions','attendance_session_events',
-    'alert_operation_results','operational_alert_events'
+    'alert_operation_results','operational_alert_events','background_job_operation_results','background_job_events'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -316,7 +338,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0018_operational_alerts"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0019_background_jobs"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -370,6 +392,11 @@ for symbol in ['create_delivery_worker','create_delivery_order','transition_deli
 attendance_ops=(ROOT/'crates/bhaipos-store/src/attendance_ops.rs').read_text()
 for symbol in ['create_employee','record_attendance_event','attendance_report']:
     assert symbol in attendance_ops, symbol
+job_ops=(ROOT/'crates/bhaipos-store/src/job_ops.rs').read_text()
+for symbol in ['enqueue_background_job','claim_next_background_job','heartbeat_background_job','request_background_job_cancellation','finish_background_job','recover_expired_background_jobs','background_jobs']:
+    assert symbol in job_ops, symbol
+for trigger in ['guard_background_job_insert','guard_background_job_update','guard_background_job_event_insert','immutable_background_job_events_update']:
+    assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
@@ -396,5 +423,6 @@ result={
     'delivery_state_collection_and_cash_custody_guards': 'ok',
     'attendance_state_and_evidence_guards': 'ok',
     'operational_alert_state_and_evidence_guards': 'ok',
+    'background_job_lifecycle_and_evidence_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))

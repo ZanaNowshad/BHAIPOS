@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 59354)
+Total output lines: 5411
+
 use bhaipos_core::{
     compute_audit_hash, hash_pin, hash_secret, price_times_quantity, sha256_hex,
     sign_sync_mutation, verify_approval, verify_pin, verify_secret, verify_sync_mutation,
@@ -22,6 +25,8 @@ mod customer_ops;
 mod delivery_ops;
 #[path = "expense_ops.rs"]
 mod expense_ops;
+#[path = "job_ops.rs"]
+mod job_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
@@ -49,7 +54,8 @@ const MIGRATION_0016: &str =
     include_str!("../../../migrations/0016_delivery_courier_operations.sql");
 const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_operations.sql");
 const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_alerts.sql");
-pub const LATEST_SCHEMA: &str = "0018_operational_alerts";
+const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_jobs.sql");
+pub const LATEST_SCHEMA: &str = "0019_background_jobs";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -288,6 +294,98 @@ pub struct FailedPrintJob {
     pub document_type: String,
     pub attempts: i64,
     pub last_error: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BackgroundJobEnqueueRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub job_type: String,
+    pub payload_json: String,
+    pub progress_total: Option<i64>,
+    pub cancellable: bool,
+    pub max_attempts: i64,
+    pub not_before: Option<DateTime<Utc>>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobResult {
+    pub job_id: Uuid,
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub cancel_requested: bool,
+    pub retry_after: Option<String>,
+    pub error: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobLease {
+    pub job_id: Uuid,
+    pub job_type: String,
+    pub payload_json: String,
+    pub lease_token: Uuid,
+    pub lease_expires_at: String,
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub cancel_requested: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobProgressResult {
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub cancel_requested: bool,
+    pub lease_expires_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobRecoveryResult {
+    pub requeued: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackgroundJobFinishOutcome {
+    Succeeded {
+        result_json: String,
+    },
+    Failed {
+        error: String,
+        retryable: bool,
+    },
+    RequiresReview {
+        error: String,
+    },
+    Cancelled {
+        result_json: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobSummary {
+    pub job_id: Uuid,
+    pub job_type: String,
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub cancellable: bool,
+    pub cancel_requested: bool,
+    pub retry_after: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -785,6 +883,26 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0016)?;
         self.conn.execute_batch(MIGRATION_0017)?;
         self.conn.execute_batch(MIGRATION_0018)?;
+        for (column, ddl) in [
+            ("origin_device_id", "ALTER TABLE background_jobs ADD COLUMN origin_device_id TEXT REFERENCES devices(id)"),
+            ("operation_id", "ALTER TABLE background_jobs ADD COLUMN operation_id TEXT"),
+            ("request_sha256", "ALTER TABLE background_jobs ADD COLUMN request_sha256 TEXT"),
+            ("attempts", "ALTER TABLE background_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
+            ("max_attempts", "ALTER TABLE background_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3"),
+            ("not_before", "ALTER TABLE background_jobs ADD COLUMN not_before TEXT"),
+            ("lease_token", "ALTER TABLE background_jobs ADD COLUMN lease_token TEXT"),
+            ("lease_owner_device_id", "ALTER TABLE background_jobs ADD COLUMN lease_owner_device_id TEXT REFERENCES devices(id)"),
+            ("lease_expires_at", "ALTER TABLE background_jobs ADD COLUMN lease_expires_at TEXT"),
+            ("cancel_requested_at", "ALTER TABLE background_jobs ADD COLUMN cancel_requested_at TEXT"),
+            ("cancel_requested_by_user_id", "ALTER TABLE background_jobs ADD COLUMN cancel_requested_by_user_id TEXT REFERENCES users(id)"),
+            ("cancel_reason", "ALTER TABLE background_jobs ADD COLUMN cancel_reason TEXT"),
+            ("retry_after", "ALTER TABLE background_jobs ADD COLUMN retry_after TEXT"),
+            ("started_at", "ALTER TABLE background_jobs ADD COLUMN started_at TEXT"),
+            ("completed_at", "ALTER TABLE background_jobs ADD COLUMN completed_at TEXT"),
+        ] {
+            Self::ensure_column(&self.conn, "background_jobs", column, ddl)?;
+        }
+        self.conn.execute_batch(MIGRATION_0019)?;
         Ok(())
     }
     fn ensure_column(
@@ -953,6 +1071,10 @@ impl Store {
             ("alert.create", "Create operational alerts"),
             ("alert.manage", "Assign and transition operational alerts"),
             ("alert.view", "View operational alerts"),
+            ("job.enqueue", "Enqueue background jobs"),
+            ("job.execute", "Execute background jobs"),
+            ("job.manage", "Cancel and recover background jobs"),
+            ("job.view", "View background jobs"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
@@ -2296,751 +2418,7 @@ impl Store {
         let has_cash = req
             .payments
             .iter()
-            .any(|p| matches!(p.kind, TenderKind::Cash));
-        if has_cash {
-            let sid = req.cash_session_id.ok_or_else(|| {
-                StoreError::Validation("cash refund requires open cash session".into())
-            })?;
-            let ok:Option<i32>=tx.query_row("SELECT 1 FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status='OPEN'",params![sid.to_string(),req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?;
-            if ok.is_none() {
-                return Err(StoreError::Authorization(
-                    "refund cash session scope/status mismatch",
-                ));
-            }
-        }
-        tx.execute("INSERT INTO refunds(id,tenant_id,branch_id,sale_id,operation_id,device_id,user_id,reason,subtotal_fils,tax_fils,total_fils,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![refund_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.sale_id.to_string(),req.operation_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.reason,subtotal.0,tax.0,total.0,req.now.to_rfc3339()])?;
-        for pl in prepared {
-            tx.execute("INSERT INTO refund_lines(id,refund_id,sale_line_id,quantity_milli,net_fils,tax_fils,gross_fils) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![Uuid::new_v4().to_string(),refund_id.to_string(),pl.sale_line_id.to_string(),pl.quantity.0,pl.net.0,pl.tax.0,pl.gross.0])?;
-            let changed=tx.execute("UPDATE stock_levels SET quantity_milli=quantity_milli+?5,version=version+1 WHERE tenant_id=?1 AND branch_id=?2 AND centre_id=?3 AND product_id=?4",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,pl.product_id,pl.quantity.0])?;
-            if changed == 0 {
-                tx.execute("INSERT INTO stock_levels(tenant_id,branch_id,centre_id,product_id,quantity_milli) VALUES(?1,?2,?3,?4,?5)",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,pl.product_id,pl.quantity.0])?;
-            }
-            tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'REFUND',?7,?8,'REFUND',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,pl.product_id,req.operation_id.to_string(),pl.quantity.0,pl.unit_cost,refund_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-            Self::apply_cost_projection(
-                &tx,
-                req.tenant_id,
-                req.branch_id,
-                &centre_id,
-                &pl.product_id,
-                pl.quantity,
-                Money(pl.unit_cost),
-            )?;
-        }
-        for p in &req.payments {
-            tx.execute("INSERT INTO refund_payments(id,refund_id,tender_kind,amount_fils,reference,created_at,cash_session_id,device_id,user_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![Uuid::new_v4().to_string(),refund_id.to_string(),format!("{:?}",p.kind).to_uppercase(),p.amount.0,p.reference,req.now.to_rfc3339(),if matches!(p.kind,TenderKind::Cash){req.cash_session_id.map(|x|x.to_string())}else{None},req.device_id.to_string(),req.user_id.to_string()])?;
-        }
-        let result = RefundResult {
-            refund_id,
-            subtotal,
-            tax,
-            total,
-        };
-        let payload = serde_json::to_string(&result)?;
-        Self::append_audit(
-            &tx,
-            req.tenant_id,
-            req.device_id,
-            req.user_id,
-            "SALE_REFUNDED",
-            "refund",
-            &refund_id.to_string(),
-            &payload,
-            req.now,
-        )?;
-        tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'refund',?6,'INSERT',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),refund_id.to_string(),payload,req.now.to_rfc3339()])?;
-        Self::record_idempotent_result(
-            &tx,
-            req.tenant_id,
-            req.operation_id,
-            "REFUND",
-            &request_sha256,
-            &result,
-            req.now,
-        )?;
-        tx.commit()?;
-        Ok(result)
-    }
-
-    pub fn find_refundable_sale(
-        &self,
-        context: LocalTerminalContext,
-        user: UserId,
-        receipt_number: &str,
-    ) -> Result<RefundableSale, StoreError> {
-        self.validate_local_session(context, user)?;
-        Self::assert_permission_conn(
-            &self.conn,
-            context.tenant_id,
-            context.branch_id,
-            user,
-            "sale.refund",
-        )?;
-        let sale:Option<(String,String,String)>=self.conn.query_row(
-            "SELECT id,receipt_number,completed_at FROM sales WHERE tenant_id=?1 AND branch_id=?2 AND receipt_number=?3 AND status='COMPLETED'",
-            params![context.tenant_id.to_string(),context.branch_id.to_string(),receipt_number.trim()],
-            |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))
-        ).optional()?;
-        let (sale_id, receipt_number, completed_at) =
-            sale.ok_or(StoreError::NotFound("completed sale receipt"))?;
-        let mut statement=self.conn.prepare(
-            "SELECT sl.id,sl.product_name_snapshot,sl.quantity_milli,sl.unit_price_fils,sl.tax_rate_bps,sl.tax_inclusive,sl.tax_category_snapshot,COALESCE((SELECT SUM(rl.quantity_milli) FROM refund_lines rl WHERE rl.sale_line_id=sl.id),0) FROM sale_lines sl WHERE sl.sale_id=?1 ORDER BY sl.rowid"
-        )?;
-        let raw = statement
-            .query_map(params![sale_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i32>(4)?,
-                    row.get::<_, i32>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut lines = Vec::new();
-        for (line_id, name, sold, unit_price, tax_bps, tax_inclusive, tax_category, refunded) in raw
-        {
-            let remaining = sold.checked_sub(refunded).ok_or_else(|| {
-                StoreError::Conflict("refunded quantity exceeds sold quantity".into())
-            })?;
-            let basis = price_times_quantity(Money(unit_price), QuantityMilli(remaining))?;
-            let rule = TaxRule {
-                category: Self::tax_category_from_snapshot(&tax_category),
-                rate_bps: tax_bps,
-                inclusive: tax_inclusive != 0,
-            };
-            lines.push(RefundableSaleLine {
-                sale_line_id: Uuid::parse_str(&line_id)
-                    .map_err(|_| StoreError::Validation("invalid sale line identity".into()))?,
-                product_name: name,
-                sold_quantity: QuantityMilli(sold),
-                refunded_quantity: QuantityMilli(refunded),
-                remaining_quantity: QuantityMilli(remaining),
-                refundable_total: rule.calculate(basis)?.gross,
-            });
-        }
-        Ok(RefundableSale {
-            sale_id: SaleId(
-                Uuid::parse_str(&sale_id)
-                    .map_err(|_| StoreError::Validation("invalid sale identity".into()))?,
-            ),
-            receipt_number,
-            completed_at,
-            lines,
-        })
-    }
-
-    pub fn quote_refund(
-        &self,
-        context: LocalTerminalContext,
-        user: UserId,
-        sale_id: SaleId,
-        lines: &[RefundLineInput],
-    ) -> Result<RefundQuote, StoreError> {
-        self.validate_local_session(context, user)?;
-        Self::assert_permission_conn(
-            &self.conn,
-            context.tenant_id,
-            context.branch_id,
-            user,
-            "sale.refund",
-        )?;
-        if lines.is_empty() {
-            return Err(StoreError::Validation("refund has no lines".into()));
-        }
-        let sale:Option<i32>=self.conn.query_row("SELECT 1 FROM sales WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status='COMPLETED'",params![sale_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string()],|row|row.get(0)).optional()?;
-        if sale.is_none() {
-            return Err(StoreError::NotFound("completed sale"));
-        }
-        let mut seen = HashSet::new();
-        let mut subtotal = Money::ZERO;
-        let mut tax = Money::ZERO;
-        let mut total = Money::ZERO;
-        for requested in lines {
-            if requested.quantity.0 <= 0 {
-                return Err(StoreError::Validation("refund quantity must be > 0".into()));
-            }
-            if !seen.insert(requested.sale_line_id) {
-                return Err(StoreError::Validation(
-                    "refund request contains duplicate sale line".into(),
-                ));
-            }
-            let row:Option<(i64,i64,i32,i32,String)>=self.conn.query_row(
-                "SELECT quantity_milli,unit_price_fils,tax_rate_bps,tax_inclusive,tax_category_snapshot FROM sale_lines WHERE id=?1 AND sale_id=?2",
-                params![requested.sale_line_id.to_string(),sale_id.to_string()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))
-            ).optional()?;
-            let (sold, unit_price, tax_bps, tax_inclusive, tax_category) =
-                row.ok_or(StoreError::NotFound("sale line"))?;
-            let refunded: i64 = self.conn.query_row(
-                "SELECT COALESCE(SUM(quantity_milli),0) FROM refund_lines WHERE sale_line_id=?1",
-                params![requested.sale_line_id.to_string()],
-                |row| row.get(0),
-            )?;
-            if refunded
-                .checked_add(requested.quantity.0)
-                .ok_or(bhaipos_core::MoneyError::Overflow)?
-                > sold
-            {
-                return Err(StoreError::Validation(
-                    "refund exceeds remaining refundable quantity".into(),
-                ));
-            }
-            let basis = price_times_quantity(Money(unit_price), requested.quantity)?;
-            let calculated = TaxRule {
-                category: Self::tax_category_from_snapshot(&tax_category),
-                rate_bps: tax_bps,
-                inclusive: tax_inclusive != 0,
-            }
-            .calculate(basis)?;
-            subtotal = subtotal.checked_add(calculated.net)?;
-            tax = tax.checked_add(calculated.tax)?;
-            total = total.checked_add(calculated.gross)?;
-        }
-        Ok(RefundQuote {
-            subtotal,
-            tax,
-            total,
-        })
-    }
-
-    pub fn record_cash_movement(
-        &mut self,
-        req: CashMovementRequest,
-    ) -> Result<CashMovementResult, StoreError> {
-        let request_sha256 = Self::cash_movement_request_sha256(&req)?;
-        if let Some(existing) = self.load_idempotent_result(
-            req.tenant_id,
-            req.operation_id,
-            "CASH_MOVEMENT",
-            &request_sha256,
-        )? {
-            return Ok(existing);
-        }
-        match req.kind {
-            CashMovementKind::NoSale if req.amount.0 != 0 => {
-                return Err(StoreError::Validation(
-                    "no-sale movement amount must be zero".into(),
-                ))
-            }
-            CashMovementKind::NoSale => {}
-            _ if req.amount.0 <= 0 => {
-                return Err(StoreError::Validation(
-                    "cash movement amount must be positive".into(),
-                ))
-            }
-            _ => {}
-        }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_active_device_tx(&tx, req.tenant_id, req.branch_id, req.device_id)?;
-        Self::assert_user_scope(&tx, req.tenant_id, req.user_id)?;
-        Self::assert_permission(
-            &tx,
-            req.tenant_id,
-            req.branch_id,
-            req.user_id,
-            req.kind.permission(),
-        )?;
-        let ok:Option<i32>=tx.query_row("SELECT 1 FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status='OPEN'",params![req.cash_session_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?;
-        if ok.is_none() {
-            return Err(StoreError::Authorization(
-                "cash session scope/status mismatch",
-            ));
-        }
-        let movement_id = Uuid::new_v4();
-        tx.execute("INSERT INTO cash_movements(id,tenant_id,branch_id,cash_session_id,device_id,user_id,operation_id,kind,amount_fils,reason,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![movement_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.cash_session_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.operation_id.to_string(),req.kind.as_db(),req.amount.0,req.reason,req.now.to_rfc3339()])?;
-        let result = CashMovementResult {
-            movement_id,
-            kind: req.kind,
-            amount: req.amount,
-        };
-        let payload = serde_json::to_string(&result)?;
-        Self::append_audit(
-            &tx,
-            req.tenant_id,
-            req.device_id,
-            req.user_id,
-            "CASH_MOVEMENT_RECORDED",
-            "cash_movement",
-            &movement_id.to_string(),
-            &payload,
-            req.now,
-        )?;
-        tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'cash_movement',?6,'INSERT',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),movement_id.to_string(),payload,req.now.to_rfc3339()])?;
-        Self::record_idempotent_result(
-            &tx,
-            req.tenant_id,
-            req.operation_id,
-            "CASH_MOVEMENT",
-            &request_sha256,
-            &result,
-            req.now,
-        )?;
-        tx.commit()?;
-        Ok(result)
-    }
-
-    pub fn cash_session_report(
-        &self,
-        tenant: TenantId,
-        branch: BranchId,
-        cash_session_id: Uuid,
-    ) -> Result<CashSessionReport, StoreError> {
-        Self::cash_session_report_conn(&self.conn, tenant, branch, cash_session_id)
-    }
-
-    pub fn close_cash_session(
-        &mut self,
-        req: CloseCashSessionRequest,
-    ) -> Result<CloseCashSessionResult, StoreError> {
-        if req.counted_cash.0 < 0 {
-            return Err(StoreError::Validation(
-                "counted cash cannot be negative".into(),
-            ));
-        }
-        let request_sha256 = Self::close_cash_session_request_sha256(&req)?;
-        if let Some(existing) = self.load_idempotent_result(
-            req.tenant_id,
-            req.operation_id,
-            "CASH_SESSION_CLOSE",
-            &request_sha256,
-        )? {
-            return Ok(existing);
-        }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_active_device_tx(&tx, req.tenant_id, req.branch_id, req.device_id)?;
-        Self::assert_user_scope(&tx, req.tenant_id, req.user_id)?;
-        Self::assert_permission(
-            &tx,
-            req.tenant_id,
-            req.branch_id,
-            req.user_id,
-            "cash.session.close",
-        )?;
-        let status: Option<String> = tx
-            .query_row(
-                "SELECT status FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3",
-                params![
-                    req.cash_session_id.to_string(),
-                    req.tenant_id.to_string(),
-                    req.branch_id.to_string()
-                ],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match status.as_deref() {
-            Some("OPEN") => {}
-            Some(_) => return Err(StoreError::Conflict("cash session is not open".into())),
-            None => return Err(StoreError::NotFound("cash session")),
-        }
-        let pre =
-            Self::cash_session_report_conn(&tx, req.tenant_id, req.branch_id, req.cash_session_id)?;
-        let variance = req.counted_cash.checked_sub(pre.expected_cash)?;
-        tx.execute("UPDATE cash_sessions SET status='CLOSED',closed_at=?2,counted_cash_fils=?3,expected_cash_fils=?4,variance_fils=?5 WHERE id=?1 AND status='OPEN'",params![req.cash_session_id.to_string(),req.now.to_rfc3339(),req.counted_cash.0,pre.expected_cash.0,variance.0])?;
-        let variance_case_id = if variance.0 != 0 {
-            let id = Uuid::new_v4();
-            let abs = variance.checked_abs()?.0;
-            let severity = if abs < 5_000 {
-                "LOW"
-            } else if abs < 20_000 {
-                "MEDIUM"
-            } else {
-                "HIGH"
-            };
-            tx.execute("INSERT INTO cash_variance_cases(id,tenant_id,branch_id,cash_session_id,expected_fils,counted_fils,variance_fils,severity,status,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'OPEN',?9)",params![id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.cash_session_id.to_string(),pre.expected_cash.0,req.counted_cash.0,variance.0,severity,req.now.to_rfc3339()])?;
-            Self::append_automatic_operational_alert(
-                &tx,
-                req.tenant_id,
-                req.branch_id,
-                req.device_id,
-                req.user_id,
-                severity,
-                "CASH_VARIANCE",
-                "Cash-session close variance requires review",
-                "cash_variance_case",
-                &id.to_string(),
-                &serde_json::json!({
-                    "cash_session_id": req.cash_session_id,
-                    "expected_fils": pre.expected_cash.0,
-                    "counted_fils": req.counted_cash.0,
-                    "variance_fils": variance.0
-                }),
-                req.now,
-            )?;
-            Some(id)
-        } else {
-            None
-        };
-        let report =
-            Self::cash_session_report_conn(&tx, req.tenant_id, req.branch_id, req.cash_session_id)?;
-        let result = CloseCashSessionResult {
-            report,
-            variance_case_id,
-        };
-        let payload = serde_json::to_string(&result)?;
-        Self::append_audit(
-            &tx,
-            req.tenant_id,
-            req.device_id,
-            req.user_id,
-            "CASH_SESSION_CLOSED",
-            "cash_session",
-            &req.cash_session_id.to_string(),
-            &payload,
-            req.now,
-        )?;
-        tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'cash_session',?6,'CLOSE',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),req.cash_session_id.to_string(),payload,req.now.to_rfc3339()])?;
-        Self::record_idempotent_result(
-            &tx,
-            req.tenant_id,
-            req.operation_id,
-            "CASH_SESSION_CLOSE",
-            &request_sha256,
-            &result,
-            req.now,
-        )?;
-        tx.commit()?;
-        Ok(result)
-    }
-
-    fn cash_session_report_conn(
-        conn: &Connection,
-        tenant: TenantId,
-        branch: BranchId,
-        cash_session_id: Uuid,
-    ) -> Result<CashSessionReport, StoreError> {
-        let row:Option<(String,i64,Option<i64>,Option<i64>)>=conn.query_row("SELECT status,opening_float_fils,counted_cash_fils,variance_fils FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-        let (status, opening, counted, variance) =
-            row.ok_or(StoreError::NotFound("cash session"))?;
-        let cash_sales:i64=conn.query_row("SELECT COALESCE(SUM(sp.amount_fils),0) FROM sale_payments sp JOIN sales s ON s.id=sp.sale_id WHERE s.cash_session_id=?1 AND s.tenant_id=?2 AND s.branch_id=?3 AND sp.tender_kind='CASH'",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string()],|r|r.get(0))?;
-        let cash_refunds:i64=conn.query_row("SELECT COALESCE(SUM(rp.amount_fils),0) FROM refund_payments rp JOIN refunds r ON r.id=rp.refund_id WHERE rp.cash_session_id=?1 AND r.tenant_id=?2 AND r.branch_id=?3 AND rp.tender_kind='CASH'",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string()],|r|r.get(0))?;
-        let cash_voids:i64=conn.query_row("SELECT COALESCE(SUM(amount_fils),0) FROM sale_void_payment_effects WHERE cash_session_id=?1 AND tenant_id=?2 AND branch_id=?3 AND tender_kind='CASH'",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string()],|r|r.get(0))?;
-        let movement_total = |kind: &str| -> Result<i64, StoreError> {
-            Ok(conn.query_row("SELECT COALESCE(SUM(amount_fils),0) FROM cash_movements WHERE cash_session_id=?1 AND tenant_id=?2 AND branch_id=?3 AND kind=?4",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string(),kind],|r|r.get(0))?)
-        };
-        let movement_count = |kind: &str| -> Result<i64, StoreError> {
-            Ok(conn.query_row("SELECT COUNT(*) FROM cash_movements WHERE cash_session_id=?1 AND tenant_id=?2 AND branch_id=?3 AND kind=?4",params![cash_session_id.to_string(),tenant.to_string(),branch.to_string(),kind],|r|r.get(0))?)
-        };
-        let paid_in = movement_total("PAID_IN")?;
-        let paid_out = movement_total("PAID_OUT")?;
-        let safe_drop = movement_total("SAFE_DROP")?;
-        let petty_cash = movement_total("PETTY_CASH")?;
-        let no_sale_count = movement_count("NO_SALE")?;
-        let expected = Money(opening)
-            .checked_add(Money(cash_sales))?
-            .checked_sub(Money(cash_refunds))?
-            .checked_sub(Money(cash_voids))?
-            .checked_add(Money(paid_in))?
-            .checked_sub(Money(paid_out))?
-            .checked_sub(Money(safe_drop))?
-            .checked_sub(Money(petty_cash))?;
-        Ok(CashSessionReport {
-            cash_session_id,
-            status,
-            opening_float: Money(opening),
-            cash_sales: Money(cash_sales),
-            cash_refunds: Money(cash_refunds),
-            cash_voids: Money(cash_voids),
-            paid_in: Money(paid_in),
-            paid_out: Money(paid_out),
-            safe_drop: Money(safe_drop),
-            petty_cash: Money(petty_cash),
-            no_sale_count,
-            expected_cash: expected,
-            counted_cash: counted.map(Money),
-            variance: variance.map(Money),
-        })
-    }
-
-    pub fn void_sale_payload_sha256(
-        sale_id: SaleId,
-        cash_session_id: Option<Uuid>,
-        reason: &str,
-    ) -> String {
-        let payload = serde_json::json!({"cash_session_id":cash_session_id.map(|v|v.to_string()),"reason":reason,"sale_id":sale_id.to_string()});
-        sha256_hex(
-            serde_json::to_string(&payload)
-                .expect("void payload serializes")
-                .as_bytes(),
-        )
-    }
-
-    pub fn void_sale(&mut self, req: VoidSaleRequest) -> Result<VoidSaleResult, StoreError> {
-        if req.reason.trim().is_empty() {
-            return Err(StoreError::Validation("void reason is required".into()));
-        }
-        let request_sha256 = Self::void_sale_request_sha256(&req)?;
-        if let Some(existing) = self.load_idempotent_result(
-            req.tenant_id,
-            req.operation_id,
-            "SALE_VOID",
-            &request_sha256,
-        )? {
-            return Ok(existing);
-        }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_active_device_tx(&tx, req.tenant_id, req.branch_id, req.device_id)?;
-        Self::assert_user_scope(&tx, req.tenant_id, req.user_id)?;
-        Self::assert_permission(&tx, req.tenant_id, req.branch_id, req.user_id, "sale.void")?;
-        let payload_sha =
-            Self::void_sale_payload_sha256(req.sale_id, req.cash_session_id, &req.reason);
-        let approval_ok:Option<i32>=tx.query_row("SELECT 1 FROM manager_approval_consumptions WHERE id=?1 AND tenant_id=?2 AND device_id=?3 AND operation_id=?4 AND action='sale.void' AND entity_id=?5 AND payload_sha256=?6",params![req.approval_ref.to_string(),req.tenant_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),req.sale_id.to_string(),payload_sha],|r|r.get(0)).optional()?;
-        if approval_ok.is_none() {
-            return Err(StoreError::Authorization(
-                "void manager approval does not match exact operation",
-            ));
-        }
-        let sale: Option<(String, String, String, i64)> = tx
-            .query_row(
-                "SELECT tenant_id,branch_id,status,total_fils FROM sales WHERE id=?1",
-                params![req.sale_id.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .optional()?;
-        let (tenant_s, branch_s, status, total) = sale.ok_or(StoreError::NotFound("sale"))?;
-        if tenant_s != req.tenant_id.to_string() || branch_s != req.branch_id.to_string() {
-            return Err(StoreError::Authorization("sale tenant/branch mismatch"));
-        }
-        if status != "COMPLETED" {
-            return Err(StoreError::Conflict(
-                "only completed sales can be voided".into(),
-            ));
-        }
-        let has_cash: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sale_payments WHERE sale_id=?1 AND tender_kind='CASH')",
-            params![req.sale_id.to_string()],
-            |r| r.get::<_, i64>(0).map(|v| v != 0),
-        )?;
-        if has_cash {
-            let sid = req.cash_session_id.ok_or_else(|| {
-                StoreError::Validation(
-                    "cash sale void requires an open cash session for payout".into(),
-                )
-            })?;
-            let ok:Option<i32>=tx.query_row("SELECT 1 FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status='OPEN'",params![sid.to_string(),req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?;
-            if ok.is_none() {
-                return Err(StoreError::Authorization(
-                    "void cash session scope/status mismatch",
-                ));
-            }
-        }
-        let void_id = Uuid::new_v4();
-        tx.execute("INSERT INTO sale_voids(id,tenant_id,branch_id,sale_id,operation_id,device_id,user_id,approval_ref,reason,reversed_total_fils,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![void_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.sale_id.to_string(),req.operation_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.approval_ref.to_string(),req.reason,total,req.now.to_rfc3339()])?;
-        let centre_id:String=tx.query_row("SELECT id FROM inventory_centres WHERE tenant_id=?1 AND branch_id=?2 ORDER BY CASE WHEN centre_type='SHOP_FLOOR' THEN 0 ELSE 1 END LIMIT 1",params![req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?.ok_or(StoreError::NotFound("inventory centre"))?;
-        {
-            let mut st=tx.prepare("SELECT id,product_id,quantity_milli,unit_cost_fils FROM sale_lines WHERE sale_id=?1")?;
-            let rows = st.query_map(params![req.sale_id.to_string()], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })?;
-            for row in rows {
-                let (sale_line_id, product_id, qty, cost) = row?;
-                let track: i32 = tx.query_row(
-                    "SELECT track_inventory FROM products WHERE id=?1 AND tenant_id=?2",
-                    params![product_id, req.tenant_id.to_string()],
-                    |r| r.get(0),
-                )?;
-                if track != 0 {
-                    let changed=tx.execute("UPDATE stock_levels SET quantity_milli=quantity_milli+?5,version=version+1 WHERE tenant_id=?1 AND branch_id=?2 AND centre_id=?3 AND product_id=?4",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,product_id,qty])?;
-                    if changed == 0 {
-                        tx.execute("INSERT INTO stock_levels(tenant_id,branch_id,centre_id,product_id,quantity_milli) VALUES(?1,?2,?3,?4,?5)",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,product_id,qty])?;
-                    }
-                    let source_id = format!("{}:{}", void_id, sale_line_id);
-                    tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'VOID',?7,?8,'SALE_VOID',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,product_id,req.operation_id.to_string(),qty,cost,source_id,req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-                    Self::apply_cost_projection(
-                        &tx,
-                        req.tenant_id,
-                        req.branch_id,
-                        &centre_id,
-                        &product_id,
-                        QuantityMilli(qty),
-                        Money(cost),
-                    )?;
-                }
-            }
-        }
-        {
-            let mut st = tx.prepare(
-                "SELECT tender_kind,amount_fils,reference FROM sale_payments WHERE sale_id=?1",
-            )?;
-            let rows = st.query_map(params![req.sale_id.to_string()], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (kind, amount, reference) = row?;
-                let cash_session = if kind == "CASH" {
-                    req.cash_session_id.map(|v| v.to_string())
-                } else {
-                    None
-                };
-                tx.execute("INSERT INTO sale_void_payment_effects(id,tenant_id,branch_id,sale_void_id,tender_kind,amount_fils,cash_session_id,device_id,user_id,reference,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),void_id.to_string(),kind,amount,cash_session,req.device_id.to_string(),req.user_id.to_string(),reference,req.now.to_rfc3339()])?;
-            }
-        }
-        tx.execute(
-            "UPDATE sales SET status='VOIDED' WHERE id=?1 AND status='COMPLETED'",
-            params![req.sale_id.to_string()],
-        )?;
-        let result = VoidSaleResult {
-            void_id,
-            sale_id: req.sale_id,
-            reversed_total: Money(total),
-        };
-        let payload = serde_json::to_string(&result)?;
-        Self::append_audit(
-            &tx,
-            req.tenant_id,
-            req.device_id,
-            req.user_id,
-            "SALE_VOIDED",
-            "sale_void",
-            &void_id.to_string(),
-            &payload,
-            req.now,
-        )?;
-        tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'sale_void',?6,'INSERT',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),void_id.to_string(),payload,req.now.to_rfc3339()])?;
-        Self::record_idempotent_result(
-            &tx,
-            req.tenant_id,
-            req.operation_id,
-            "SALE_VOID",
-            &request_sha256,
-            &result,
-            req.now,
-        )?;
-        tx.commit()?;
-        Ok(result)
-    }
-
-    pub fn claim_next_print_job(
-        &mut self,
-        tenant: TenantId,
-        branch: BranchId,
-        device: DeviceId,
-        now: DateTime<Utc>,
-    ) -> Result<Option<PrintJobLease>, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_active_device_tx(&tx, tenant, branch, device)?;
-        let row:Option<PrintJobRow>=tx.query_row("SELECT pj.id,pj.sale_id,pj.document_type,pj.snapshot_sha256,pj.printer_target,pj.attempts,rs.receipt_text,EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.sale_id=pj.sale_id AND sp.tender_kind='CASH') FROM print_jobs pj LEFT JOIN receipt_snapshots rs ON rs.sale_id=pj.sale_id WHERE pj.tenant_id=?1 AND pj.branch_id=?2 AND pj.device_id=?3 AND pj.state='PENDING' ORDER BY pj.created_at,pj.id LIMIT 1",params![tenant.to_string(),branch.to_string(),device.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
-        let Some((
-            id,
-            sale_id,
-            document_type,
-            snapshot_sha256,
-            printer_target,
-            attempts,
-            receipt_text,
-            cash_sale,
-        )) = row
-        else {
-            tx.commit()?;
-            return Ok(None);
-        };
-        if let (Some(expected), Some(text)) = (&snapshot_sha256, &receipt_text) {
-            if sha256_hex(text.as_bytes()) != *expected {
-                return Err(StoreError::Conflict(
-                    "receipt snapshot integrity check failed".into(),
-                ));
-            }
-        }
-        if sale_id.is_some() && receipt_text.is_none() {
-            return Err(StoreError::Conflict(
-                "sale print job has no historical receipt snapshot".into(),
-            ));
-        }
-        let changed=tx.execute("UPDATE print_jobs SET state='PRINTING',attempts=attempts+1,last_error=NULL,updated_at=?2 WHERE id=?1 AND state='PENDING'",params![id,now.to_rfc3339()])?;
-        if changed != 1 {
-            return Err(StoreError::Conflict("print job lease lost".into()));
-        }
-        let lease_token = Uuid::new_v4();
-        tx.execute(
-            "INSERT INTO print_job_leases(print_job_id,lease_token,leased_at) VALUES(?1,?2,?3)",
-            params![id, lease_token.to_string(), now.to_rfc3339()],
-        )?;
-        let lease = PrintJobLease {
-            print_job_id: Uuid::parse_str(&id)
-                .map_err(|_| StoreError::Validation("invalid print job id".into()))?,
-            sale_id: sale_id
-                .map(|v| {
-                    Uuid::parse_str(&v)
-                        .map(SaleId)
-                        .map_err(|_| StoreError::Validation("invalid sale id in print job".into()))
-                })
-                .transpose()?,
-            document_type,
-            snapshot_sha256,
-            receipt_text,
-            printer_target,
-            lease_token,
-            cash_drawer_pulse: cash_sale != 0,
-            attempt: attempts + 1,
-        };
-        tx.commit()?;
-        Ok(Some(lease))
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "print completion binds the lease to trusted terminal and error evidence"
-    )]
-    pub fn finish_print_job(
-        &mut self,
-        tenant: TenantId,
-        branch: BranchId,
-        device: DeviceId,
-        print_job_id: Uuid,
-        lease_token: Uuid,
-        success: bool,
-        error: Option<&str>,
-        now: DateTime<Utc>,
-    ) -> Result<(), StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::assert_active_device_tx(&tx, tenant, branch, device)?;
-        if success && error.is_some() {
-            return Err(StoreError::Validation(
-                "successful print cannot contain error".into(),
-            ));
-        }
-        let state = if success { "PRINTED" } else { "FAILED" };
-        let n=tx.execute("UPDATE print_jobs SET state=?6,last_error=?7,updated_at=?8 WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND device_id=?4 AND state='PRINTING' AND EXISTS(SELECT 1 FROM print_job_leases pjl WHERE pjl.print_job_id=print_jobs.id AND pjl.lease_token=?5)",params![print_job_id.to_string(),tenant.to_string(),branch.to_string(),device.to_string(),lease_token.to_string(),state,error,now.to_rfc3339()])?;
-        if n != 1 {
-            return Err(StoreError::Conflict(
-                "print job is not held by this device".into(),
-            ));
-        }
-        tx.execute(
-            "DELETE FROM print_job_leases WHERE print_job_id=?1 AND lease_token=?2",
-            params![print_job_id.to_string(), lease_token.to_string()],
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn recover_stale_print_jobs(
-        &mut self,
-        tenant: TenantId,
-        branch: BranchId,
-        device: DeviceId,
-        stale_before: DateTime<Utc>,
-        now: DateTime<Utc>,
+            .any(|p| matches!(p.kind, Te…9354 tokens truncated…      now: DateTime<Utc>,
     ) -> Result<usize, StoreError> {
         let tx = self
             .conn
