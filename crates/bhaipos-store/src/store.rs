@@ -1614,9 +1614,11 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional()?;
-        let (device_id, user_id) = match cart_scope {
-            Some((t, b, s, device, user))
-                if t == tenant.to_string() && b == branch.to_string() && s == "ACTIVE" => {
+        let (device_id, user_id) =
+            match cart_scope {
+                Some((t, b, s, device, user))
+                    if t == tenant.to_string() && b == branch.to_string() && s == "ACTIVE" =>
+                {
                     let device_id = DeviceId(Uuid::parse_str(&device).map_err(|_| {
                         StoreError::Validation("invalid cart device identity".into())
                     })?);
@@ -1625,9 +1627,9 @@ impl Store {
                     })?);
                     (device_id, user_id)
                 }
-            Some(_) => return Err(StoreError::Authorization("cart scope/status mismatch")),
-            None => return Err(StoreError::NotFound("cart")),
-        };
+                Some(_) => return Err(StoreError::Authorization("cart scope/status mismatch")),
+                None => return Err(StoreError::NotFound("cart")),
+            };
         let row: Option<BarcodeProductRow> = tx.query_row(
             "SELECT p.id,p.name,p.sku,p.base_price_fils,p.current_cost_fils,p.tax_rate_bps,p.tax_inclusive,p.allow_decimal_qty FROM product_barcodes pb JOIN products p ON p.id=pb.product_id JOIN branch_assortments ba ON ba.product_id=p.id AND ba.tenant_id=p.tenant_id AND ba.branch_id=?2 WHERE pb.tenant_id=?1 AND pb.barcode=?3 AND p.status='ACTIVE' AND ba.sellable=1 LIMIT 1",
             params![tenant.to_string(),branch.to_string(),barcode],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
@@ -2023,7 +2025,7 @@ impl Store {
                     tx.execute("INSERT INTO stock_levels(tenant_id,branch_id,centre_id,product_id,quantity_milli) VALUES(?1,?2,?3,?4,?5)",params![req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,l.product_id,-l.qty])?;
                 }
                 tx.execute("INSERT INTO inventory_movements(id,tenant_id,branch_id,centre_id,product_id,operation_id,movement_type,quantity_milli,unit_cost_fils,source_type,source_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,'SALE',?7,?8,'SALE',?9,?10,?11,?12)",params![Uuid::new_v4().to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),centre_id,l.product_id,req.operation_id.to_string(),-l.qty,l.cost,sale_id.to_string(),req.device_id.to_string(),req.user_id.to_string(),req.now.to_rfc3339()])?;
-                Self::apply_cost_projection(
+                    Self::apply_cost_projection(
                     &tx,
                     req.tenant_id,
                     req.branch_id,
