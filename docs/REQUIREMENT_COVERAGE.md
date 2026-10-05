@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
-Assessment date: 2026-10-04
-Authority baseline: public `main` commit `be81a54a595f1ab3f03f250e8e2169ddf82fa348` plus the evidence-driven operational-alert evaluator under review
-Working branch: `codex/remaining-alert-producers-20261004`
+Assessment date: 2026-10-05
+Authority baseline: public `main` commit `ba4d93a1c1e5db61de2c1cababfa9b7fd082b04a` plus the durable background-job engine under review
+Working branch: `codex/background-jobs-20261004`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -57,7 +57,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 38 | Knowledge base | NOT STARTED | Versioned-document schema only | Storage, indexing, permissions and archive flows required |
 | 39 | Imports and exports | NOT STARTED | No executable wizard | CSV/XLSX mapping, conservative match, audit and formula-injection handling required |
 | 40 | Backup, restore and DB health | NOT STARTED | Backup/restore record schema only | WAL-aware implementation, compatibility preview and recovery tests required |
-| 41 | Background jobs | NOT STARTED | Durable job schema only | Worker, progress, cancellation and recovery semantics required |
+| 41 | Background jobs | IN PROGRESS | `0019_background_jobs.sql`; payload-bound enqueue; replay-safe claim/heartbeat/progress/finish/recovery operations; opaque leases; bounded monotonic progress; cancellation; retry backoff; immutable events; trusted RBAC/scope/audit boundary; GitHub Actions runs `37240547597` and `37258354228` pass all jobs | Concrete handlers/scheduler integration for backup, restore, import/export, OCR, AI, sync and analytics plus Windows interruption exercise remain |
 | 42 | Diagnostics | NOT STARTED | Diagnostic data model inputs exist | Redacted export and runtime checks required |
 | 43 | Update and release security | NOT STARTED | Tauri packaging shell and CI core checks only | Signed updater, Authenticode, manifest, SBOM and provenance required |
 | 44 | Tauri trust boundary | IMPLEMENTED — UNVERIFIED | Minimal capabilities/CSP; explicit typed command allow-list; renderer DTOs omit authority; no shell/raw DB/filesystem command | Cargo/runtime verification and future sidecar IPC review required |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Implement the durable background-job worker required by backups, imports, OCR, AI batches and synchronization maintenance, with leases, progress, cancellation and interruption recovery.
+Implement WAL-aware backup, integrity verification and compatibility-checked restore as the first concrete background-job handler, including pre-restore safety backup and interruption/recovery evidence.
