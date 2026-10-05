@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
 Assessment date: 2026-10-05
-Authority baseline: public `main` commit `4ca59959d703209dd62bccade478202b16f172fa` plus verified backup/restore under review
-Working branch: `codex/backup-restore-20261005`
+Authority baseline: public `main` commit `a251a14c29bf24bb44b12323fc137a5b1bae2cfb` plus trusted backup administration/worker dispatch under review
+Working branch: `codex/backup-job-dispatch-20261005`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -56,8 +56,8 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 37 | AI back office | NOT STARTED | Safety/action/undo schema and architecture boundary documented | Tool registry, policy engine, previews, confirmations and providers missing |
 | 38 | Knowledge base | NOT STARTED | Versioned-document schema only | Storage, indexing, permissions and archive flows required |
 | 39 | Imports and exports | NOT STARTED | No executable wizard | CSV/XLSX mapping, conservative match, audit and formula-injection handling required |
-| 40 | Backup, restore and DB health | IN PROGRESS | `0020_backup_restore.sql`; SQLite online backup; streaming SHA-256; integrity/foreign-key checks; tenant/terminal/schema compatibility preview; owner-only restore; verified pre-restore safety backup; restored image is staged with immutable operation/restore/audit evidence before live replacement; corruption refusal and replay tests; GitHub Actions run `37260286733` passes all jobs | Scheduler/retention, desktop commands/UI, encryption/key custody, external-backup import policy and clean-Windows crash/corruption acceptance remain |
-| 41 | Background jobs | IN PROGRESS | `0019_background_jobs.sql`; payload-bound enqueue; replay-safe claim/heartbeat/progress/finish/recovery operations; opaque leases; bounded monotonic progress; cancellation; retry backoff; immutable events; trusted RBAC/scope/audit boundary; GitHub Actions runs `37240547597` and `37258354228` pass all jobs | Concrete handlers/scheduler integration for backup, restore, import/export, OCR, AI, sync and analytics plus Windows interruption exercise remain |
+| 40 | Backup, restore and DB health | IN PROGRESS | `0020_backup_restore.sql`; SQLite online backup; streaming SHA-256; integrity/foreign-key checks; tenant/terminal/schema compatibility preview; owner-only restore; verified pre-restore safety backup; restored image is staged with immutable operation/restore/audit evidence before live replacement; corruption refusal and replay tests; narrow trusted desktop commands; durable manual-backup dispatch; GitHub Actions runs `37260286733` and `37261516269` pass all jobs | Scheduler/retention, administration UI, encryption/key custody, external-backup import policy and clean-Windows crash/corruption acceptance remain |
+| 41 | Background jobs | IN PROGRESS | `0019_background_jobs.sql`; payload-bound enqueue; replay-safe claim/heartbeat/progress/finish/recovery operations; opaque leases; bounded monotonic progress; cancellation; retry backoff; immutable events; trusted RBAC/scope/audit boundary; concrete backup handler with expired-lease recovery/cancellation/review routing; GitHub Actions runs `37240547597`, `37258354228` and `37261516269` pass all jobs | Scheduler plus concrete handlers for restore, import/export, OCR, AI, sync and analytics and Windows interruption exercise remain |
 | 42 | Diagnostics | NOT STARTED | Diagnostic data model inputs exist | Redacted export and runtime checks required |
 | 43 | Update and release security | NOT STARTED | Tauri packaging shell and CI core checks only | Signed updater, Authenticode, manifest, SBOM and provenance required |
 | 44 | Tauri trust boundary | IMPLEMENTED — UNVERIFIED | Minimal capabilities/CSP; explicit typed command allow-list; renderer DTOs omit authority; no shell/raw DB/filesystem command | Cargo/runtime verification and future sidecar IPC review required |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Wire verified backup creation to the durable background-job engine with scheduling/retention and trusted desktop administration, then exercise interruption recovery on Windows before enabling restore in production UI.
+Add backup scheduling/retention policy and an owner administration UI, then exercise interruption recovery on Windows before enabling restore in production UI.
