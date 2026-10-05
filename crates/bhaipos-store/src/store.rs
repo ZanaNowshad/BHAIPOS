@@ -56,7 +56,8 @@ const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_o
 const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_alerts.sql");
 const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_jobs.sql");
 const MIGRATION_0020: &str = include_str!("../../../migrations/0020_backup_restore.sql");
-pub const LATEST_SCHEMA: &str = "0020_backup_restore";
+const MIGRATION_0021: &str = include_str!("../../../migrations/0021_backup_scheduling.sql");
+pub const LATEST_SCHEMA: &str = "0021_backup_scheduling";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -366,6 +367,37 @@ pub struct RestoreResult {
     pub completed_at: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct BackupScheduleRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub interval_minutes: i64,
+    pub retention_count: i64,
+    pub enabled: bool,
+    pub first_run_at: DateTime<Utc>,
+    pub authorization_valid_days: i64,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupScheduleResult {
+    pub schedule_id: Uuid,
+    pub state: String,
+    pub interval_minutes: i64,
+    pub retention_count: i64,
+    pub next_run_at: String,
+    pub authorization_expires_at: String,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupScheduleTickResult {
+    pub enqueued: usize,
+    pub requires_review: usize,
+    pub job_ids: Vec<Uuid>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundJobResult {
     pub job_id: Uuid,
@@ -383,6 +415,7 @@ pub struct BackgroundJobResult {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundJobLease {
     pub job_id: Uuid,
+    pub user_id: UserId,
     pub job_type: String,
     pub payload_json: String,
     pub lease_token: Uuid,
@@ -961,6 +994,7 @@ impl Store {
             Self::ensure_column(&self.conn, table, column, ddl)?;
         }
         self.conn.execute_batch(MIGRATION_0020)?;
+        self.conn.execute_batch(MIGRATION_0021)?;
         Ok(())
     }
     fn ensure_column(
@@ -1135,6 +1169,7 @@ impl Store {
             ("job.view", "View background jobs"),
             ("backup.create", "Create and verify backups"),
             ("backup.restore", "Restore verified backups"),
+            ("backup.schedule", "Configure scheduled backups"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),

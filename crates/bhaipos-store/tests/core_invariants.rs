@@ -4,10 +4,10 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest, CashMovementKind,
-    CashMovementRequest, CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest,
-    NewProduct, PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest, Store,
-    StoreError, SyncDeliveryOutcome,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
+    BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
+    CloseCashSessionRequest, LocalBootstrapRequest, NewProduct, PaymentInput, RefundLineInput,
+    RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -96,6 +96,7 @@ fn fixture() -> Fixture {
         ("job.view", "View background jobs"),
         ("backup.create", "Create and verify backups"),
         ("backup.restore", "Restore verified backups"),
+        ("backup.schedule", "Configure scheduled backups"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -374,6 +375,144 @@ fn corrupted_backup_is_rejected_before_restore_mutates_business_data() {
         .unwrap();
     assert_eq!(name, "Must survive refused restore");
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn scheduled_backups_enqueue_once_and_expired_authority_requires_review() {
+    let mut f = fixture();
+    let now = t("2026-10-05T06:00:00Z");
+    let owner_role = Uuid::new_v4();
+    f.store.create_role(owner_role, f.tenant, "owner").unwrap();
+    f.store
+        .grant_permission(owner_role, "backup.schedule")
+        .unwrap();
+    f.store
+        .grant_permission(owner_role, "backup.create")
+        .unwrap();
+    f.store.grant_permission(owner_role, "job.enqueue").unwrap();
+    f.store.grant_permission(owner_role, "job.execute").unwrap();
+    f.store
+        .assign_role(f.user, owner_role, Some(f.branch))
+        .unwrap();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let configure_operation = OperationId::new();
+    let request = BackupScheduleRequest {
+        context,
+        user_id: f.user,
+        operation_id: configure_operation,
+        interval_minutes: 60,
+        retention_count: 3,
+        enabled: true,
+        first_run_at: now,
+        authorization_valid_days: 30,
+        now,
+    };
+    let schedule = f.store.configure_backup_schedule(request.clone()).unwrap();
+    assert_eq!(
+        schedule,
+        f.store.configure_backup_schedule(request).unwrap()
+    );
+    assert_eq!(schedule.state, "ACTIVE");
+    assert!(matches!(
+        f.store.configure_backup_schedule(BackupScheduleRequest {
+            interval_minutes: 120,
+            ..BackupScheduleRequest {
+                context,
+                user_id: f.user,
+                operation_id: configure_operation,
+                interval_minutes: 60,
+                retention_count: 3,
+                enabled: true,
+                first_run_at: now,
+                authorization_valid_days: 30,
+                now,
+            }
+        }),
+        Err(StoreError::Conflict(_))
+    ));
+
+    let tick_operation = OperationId::new();
+    let tick = f
+        .store
+        .enqueue_due_backup_jobs(context, tick_operation, "0.1.0", now)
+        .unwrap();
+    assert_eq!(tick.enqueued, 1);
+    assert_eq!(
+        tick,
+        f.store
+            .enqueue_due_backup_jobs(context, tick_operation, "0.1.0", now)
+            .unwrap()
+    );
+    assert_eq!(
+        f.store
+            .enqueue_due_backup_jobs(context, OperationId::new(), "0.1.0", now)
+            .unwrap()
+            .enqueued,
+        0
+    );
+    let queued: (i64, String) = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT COUNT(*),MIN(job_type) FROM background_jobs WHERE tenant_id=?1 AND origin_device_id=?2 AND job_type='BACKUP_CREATE'",
+            params![f.tenant.to_string(), f.device.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(queued, (1, "BACKUP_CREATE".into()));
+    let scheduled_claim_operation = OperationId::new();
+    let scheduled_lease = f
+        .store
+        .claim_next_scheduled_backup_job(context, scheduled_claim_operation, 120, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(scheduled_lease.user_id, f.user);
+    assert_eq!(scheduled_lease.job_type, "BACKUP_CREATE");
+    assert_eq!(
+        Some(scheduled_lease),
+        f.store
+            .claim_next_scheduled_backup_job(context, scheduled_claim_operation, 120, now)
+            .unwrap()
+    );
+    assert_eq!(
+        f.store
+            .enqueue_due_backup_jobs(
+                context,
+                OperationId::new(),
+                "0.1.0",
+                now + chrono::Duration::minutes(60),
+            )
+            .unwrap()
+            .enqueued,
+        1
+    );
+
+    let expired = f
+        .store
+        .enqueue_due_backup_jobs(
+            context,
+            OperationId::new(),
+            "0.1.0",
+            now + chrono::Duration::days(31),
+        )
+        .unwrap();
+    assert_eq!(expired.enqueued, 0);
+    assert_eq!(expired.requires_review, 1);
+    let state: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT state FROM backup_schedules WHERE id=?1",
+            params![schedule.schedule_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "REQUIRES_REVIEW");
 }
 
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {

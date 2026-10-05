@@ -6,6 +6,7 @@
 use super::*;
 
 type ClaimableBackgroundJobRow = (String, String, String, i64, i64, i64, Option<i64>, i32);
+type ScheduledBackupJobRow = (String, String, String, i64, i64, i64, Option<i64>, String);
 
 impl Store {
     pub fn enqueue_background_job(
@@ -188,6 +189,7 @@ impl Store {
                 .map_err(|_| StoreError::Validation("invalid background job identity".into()))?;
             let lease = BackgroundJobLease {
                 job_id: parsed_job_id,
+                user_id: user,
                 job_type,
                 payload_json,
                 lease_token,
@@ -219,6 +221,112 @@ impl Store {
             context.tenant_id,
             operation_id,
             "CLAIM",
+            &digest,
+            &result,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn claim_next_scheduled_backup_job(
+        &mut self,
+        context: LocalTerminalContext,
+        operation_id: OperationId,
+        lease_seconds: i64,
+        now: DateTime<Utc>,
+    ) -> Result<Option<BackgroundJobLease>, StoreError> {
+        self.validate_local_device_context(context)?;
+        Self::validate_background_job_lease_seconds(lease_seconds)?;
+        let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({
+            "branch_id": context.branch_id,
+            "device_id": context.device_id,
+            "lease_seconds": lease_seconds,
+            "job_type": "BACKUP_CREATE",
+            "authority": "ACTIVE_BACKUP_SCHEDULE"
+        }))?);
+        if let Some(result) = self.load_background_job_operation(
+            context.tenant_id,
+            operation_id,
+            "CLAIM_SCHEDULED_BACKUP",
+            &digest,
+        )? {
+            return Ok(result);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<ScheduledBackupJobRow> = tx
+            .query_row(
+                "SELECT j.id,j.job_type,j.payload_json,j.attempts,j.max_attempts,j.progress_current,j.progress_total,j.created_by_user_id FROM background_jobs j JOIN backup_schedules s ON s.id=json_extract(j.payload_json,'$.schedule_id') JOIN users u ON u.id=j.created_by_user_id AND u.tenant_id=j.tenant_id AND u.status='ACTIVE' WHERE j.tenant_id=?1 AND j.branch_id=?2 AND j.origin_device_id=?3 AND j.job_type='BACKUP_CREATE' AND j.state='QUEUED' AND datetime(COALESCE(j.retry_after,j.not_before,j.created_at))<=datetime(?4) AND s.tenant_id=j.tenant_id AND s.branch_id=j.branch_id AND s.device_id=?3 AND s.state='ACTIVE' AND s.authorized_by_user_id=j.created_by_user_id AND datetime(s.authorization_expires_at)>datetime(?4) AND (SELECT COUNT(DISTINCT rp.permission_code) FROM user_roles ur JOIN roles role ON role.id=ur.role_id AND role.tenant_id=j.tenant_id JOIN role_permissions rp ON rp.role_id=role.id WHERE ur.user_id=j.created_by_user_id AND (ur.branch_id IS NULL OR ur.branch_id=j.branch_id) AND rp.permission_code IN ('backup.create','job.enqueue','job.execute'))=3 ORDER BY datetime(COALESCE(j.retry_after,j.not_before,j.created_at)),j.created_at,j.id LIMIT 1",
+                params![context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),now.to_rfc3339()],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?)),
+            )
+            .optional()?;
+        let result = if let Some((
+            job_id,
+            job_type,
+            payload_json,
+            attempts,
+            max_attempts,
+            progress_current,
+            progress_total,
+            user_id,
+        )) = row
+        {
+            let user = UserId(
+                Uuid::parse_str(&user_id)
+                    .map_err(|_| StoreError::Validation("invalid scheduled job user".into()))?,
+            );
+            let lease_token = Uuid::new_v4();
+            let lease_expires_at = now
+                .checked_add_signed(chrono::Duration::seconds(lease_seconds))
+                .ok_or_else(|| StoreError::Validation("job lease expiry overflow".into()))?;
+            let changed = tx.execute(
+                "UPDATE background_jobs SET state='RUNNING',attempts=attempts+1,lease_token=?2,lease_owner_device_id=?3,lease_expires_at=?4,retry_after=NULL,error_text=NULL,started_at=COALESCE(started_at,?5),updated_at=?5 WHERE id=?1 AND tenant_id=?6 AND branch_id=?7 AND state='QUEUED'",
+                params![job_id,lease_token.to_string(),context.device_id.to_string(),lease_expires_at.to_rfc3339(),now.to_rfc3339(),context.tenant_id.to_string(),context.branch_id.to_string()],
+            )?;
+            if changed != 1 {
+                return Err(StoreError::Conflict(
+                    "scheduled backup job lease lost".into(),
+                ));
+            }
+            let parsed_job_id = Uuid::parse_str(&job_id)
+                .map_err(|_| StoreError::Validation("invalid background job identity".into()))?;
+            let lease = BackgroundJobLease {
+                job_id: parsed_job_id,
+                user_id: user,
+                job_type,
+                payload_json,
+                lease_token,
+                lease_expires_at: lease_expires_at.to_rfc3339(),
+                attempt: attempts + 1,
+                max_attempts,
+                progress_current,
+                progress_total,
+                cancel_requested: false,
+            };
+            Self::append_background_job_event(
+                &tx,
+                context,
+                user,
+                operation_id,
+                parsed_job_id,
+                "CLAIMED",
+                Some("QUEUED"),
+                "RUNNING",
+                &serde_json::json!({"attempt":lease.attempt,"lease_expires_at":lease.lease_expires_at,"authority":"ACTIVE_BACKUP_SCHEDULE"}),
+                now,
+            )?;
+            Some(lease)
+        } else {
+            None
+        };
+        Self::record_background_job_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "CLAIM_SCHEDULED_BACKUP",
             &digest,
             &result,
             now,

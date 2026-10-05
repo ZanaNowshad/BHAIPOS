@@ -25,6 +25,333 @@ struct BackupRecordEvidence {
 }
 
 impl Store {
+    pub fn configure_backup_schedule(
+        &mut self,
+        request: BackupScheduleRequest,
+    ) -> Result<BackupScheduleResult, StoreError> {
+        self.validate_local_session(request.context, request.user_id)?;
+        self.assert_owner(request.context, request.user_id)?;
+        if !(60..=10_080).contains(&request.interval_minutes) {
+            return Err(StoreError::Validation(
+                "backup interval must be between 60 and 10080 minutes".into(),
+            ));
+        }
+        if !(1..=365).contains(&request.retention_count) {
+            return Err(StoreError::Validation(
+                "backup retention count must be between 1 and 365".into(),
+            ));
+        }
+        if !(1..=90).contains(&request.authorization_valid_days) {
+            return Err(StoreError::Validation(
+                "scheduled backup authorization must be valid for 1 to 90 days".into(),
+            ));
+        }
+        let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({
+            "branch_id": request.context.branch_id,
+            "device_id": request.context.device_id,
+            "interval_minutes": request.interval_minutes,
+            "retention_count": request.retention_count,
+            "enabled": request.enabled,
+            "first_run_at": request.first_run_at.to_rfc3339(),
+            "authorization_valid_days": request.authorization_valid_days,
+        }))?);
+        if let Some(result) = self.load_backup_schedule_operation(
+            request.context.tenant_id,
+            request.operation_id,
+            "CONFIGURE",
+            &digest,
+        )? {
+            return Ok(result);
+        }
+        let expires_at = request
+            .now
+            .checked_add_signed(chrono::Duration::days(request.authorization_valid_days))
+            .ok_or_else(|| StoreError::Validation("authorization expiry overflow".into()))?;
+        let state = if request.enabled {
+            "ACTIVE"
+        } else {
+            "DISABLED"
+        };
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            request.context.tenant_id,
+            request.context.branch_id,
+            request.user_id,
+            "backup.schedule",
+        )?;
+        let existing: Option<(String, String, i64)> = tx
+            .query_row(
+                "SELECT id,state,version FROM backup_schedules WHERE tenant_id=?1 AND device_id=?2",
+                params![
+                    request.context.tenant_id.to_string(),
+                    request.context.device_id.to_string()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (schedule_id, previous_state, version) = match existing {
+            Some((id, previous_state, version)) => {
+                tx.execute(
+                    "UPDATE backup_schedules SET state=?2,interval_minutes=?3,retention_count=?4,next_run_at=?5,authorization_expires_at=?6,authorized_by_user_id=?7,version=version+1,updated_at=?8 WHERE id=?1",
+                    params![id,state,request.interval_minutes,request.retention_count,request.first_run_at.to_rfc3339(),expires_at.to_rfc3339(),request.user_id.to_string(),request.now.to_rfc3339()],
+                )?;
+                (
+                    Uuid::parse_str(&id).map_err(|_| {
+                        StoreError::Validation("invalid backup schedule identity".into())
+                    })?,
+                    Some(previous_state),
+                    version + 1,
+                )
+            }
+            None => {
+                let id = Uuid::new_v4();
+                tx.execute(
+                    "INSERT INTO backup_schedules(id,tenant_id,branch_id,device_id,state,interval_minutes,retention_count,next_run_at,authorization_expires_at,authorized_by_user_id,version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,?11,?11)",
+                    params![id.to_string(),request.context.tenant_id.to_string(),request.context.branch_id.to_string(),request.context.device_id.to_string(),state,request.interval_minutes,request.retention_count,request.first_run_at.to_rfc3339(),expires_at.to_rfc3339(),request.user_id.to_string(),request.now.to_rfc3339()],
+                )?;
+                (id, None, 1)
+            }
+        };
+        let result = BackupScheduleResult {
+            schedule_id,
+            state: state.into(),
+            interval_minutes: request.interval_minutes,
+            retention_count: request.retention_count,
+            next_run_at: request.first_run_at.to_rfc3339(),
+            authorization_expires_at: expires_at.to_rfc3339(),
+            version,
+        };
+        Self::append_backup_schedule_event(
+            &tx,
+            request.context,
+            request.user_id,
+            request.operation_id,
+            schedule_id,
+            "CONFIGURED",
+            previous_state.as_deref(),
+            state,
+            &serde_json::to_value(&result)?,
+            request.now,
+        )?;
+        Self::record_backup_schedule_operation(
+            &tx,
+            request.context.tenant_id,
+            request.operation_id,
+            "CONFIGURE",
+            &digest,
+            &result,
+            request.now,
+        )?;
+        Self::append_audit(
+            &tx,
+            request.context.tenant_id,
+            request.context.device_id,
+            request.user_id,
+            "BACKUP_SCHEDULE_CONFIGURED",
+            "backup_schedule",
+            &schedule_id.to_string(),
+            &serde_json::to_string(&result)?,
+            request.now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn enqueue_due_backup_jobs(
+        &mut self,
+        context: LocalTerminalContext,
+        operation_id: OperationId,
+        app_version: &str,
+        now: DateTime<Utc>,
+    ) -> Result<BackupScheduleTickResult, StoreError> {
+        self.validate_local_device_context(context)?;
+        let app_version = app_version.trim();
+        if app_version.is_empty() || app_version.len() > 64 {
+            return Err(StoreError::Validation(
+                "application version must be present and at most 64 characters".into(),
+            ));
+        }
+        let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({
+            "branch_id": context.branch_id,
+            "device_id": context.device_id,
+            "app_version": app_version,
+        }))?);
+        if let Some(result) = self.load_backup_schedule_operation(
+            context.tenant_id,
+            operation_id,
+            "ENQUEUE_DUE",
+            &digest,
+        )? {
+            return Ok(result);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let schedules = {
+            let mut statement = tx.prepare(
+                "SELECT id,interval_minutes,retention_count,next_run_at,authorization_expires_at,authorized_by_user_id,state FROM backup_schedules WHERE tenant_id=?1 AND branch_id=?2 AND device_id=?3 AND state='ACTIVE' AND datetime(next_run_at)<=datetime(?4) ORDER BY next_run_at,id",
+            )?;
+            let rows = statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        context.device_id.to_string(),
+                        now.to_rfc3339()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, String>(6)?,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut result = BackupScheduleTickResult {
+            enqueued: 0,
+            requires_review: 0,
+            job_ids: Vec::new(),
+        };
+        for (schedule, interval, retention, next_run, expires, authorized_user, state) in schedules
+        {
+            let schedule_id = Uuid::parse_str(&schedule)
+                .map_err(|_| StoreError::Validation("invalid backup schedule identity".into()))?;
+            let user = UserId(Uuid::parse_str(&authorized_user).map_err(|_| {
+                StoreError::Validation("invalid schedule authorization user".into())
+            })?);
+            let expires_at = DateTime::parse_from_rfc3339(&expires)
+                .map_err(|_| {
+                    StoreError::Validation("invalid schedule authorization expiry".into())
+                })?
+                .with_timezone(&Utc);
+            let permission_count: i64 = tx.query_row(
+                "SELECT COUNT(DISTINCT rp.permission_code) FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles role ON role.id=ur.role_id JOIN role_permissions rp ON rp.role_id=role.id WHERE u.id=?1 AND u.tenant_id=?2 AND u.status='ACTIVE' AND role.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3) AND rp.permission_code IN ('backup.create','job.enqueue','job.execute')",
+                params![user.to_string(),context.tenant_id.to_string(),context.branch_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if expires_at <= now || permission_count != 3 {
+                tx.execute(
+                    "UPDATE backup_schedules SET state='REQUIRES_REVIEW',version=version+1,updated_at=?2 WHERE id=?1 AND state='ACTIVE'",
+                    params![schedule, now.to_rfc3339()],
+                )?;
+                Self::append_backup_schedule_event(
+                    &tx,
+                    context,
+                    user,
+                    operation_id,
+                    schedule_id,
+                    "AUTHORIZATION_REVIEW_REQUIRED",
+                    Some(&state),
+                    "REQUIRES_REVIEW",
+                    &serde_json::json!({"authorization_expired":expires_at<=now,"permission_count":permission_count}),
+                    now,
+                )?;
+                Self::append_audit(
+                    &tx,
+                    context.tenant_id,
+                    context.device_id,
+                    user,
+                    "BACKUP_SCHEDULE_REQUIRES_REVIEW",
+                    "backup_schedule",
+                    &schedule,
+                    &serde_json::json!({"authorization_expired":expires_at<=now,"permission_count":permission_count}).to_string(),
+                    now,
+                )?;
+                result.requires_review += 1;
+                continue;
+            }
+            let next = DateTime::parse_from_rfc3339(&next_run)
+                .map_err(|_| StoreError::Validation("invalid next backup time".into()))?
+                .with_timezone(&Utc);
+            let overdue_minutes = now.signed_duration_since(next).num_minutes().max(0);
+            let steps = overdue_minutes
+                .checked_div(interval)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| StoreError::Validation("backup schedule overflow".into()))?;
+            let advance_minutes = interval
+                .checked_mul(steps)
+                .ok_or_else(|| StoreError::Validation("backup schedule overflow".into()))?;
+            let advanced = next
+                .checked_add_signed(chrono::Duration::minutes(advance_minutes))
+                .ok_or_else(|| StoreError::Validation("backup schedule overflow".into()))?;
+            let job_id = Uuid::new_v4();
+            let payload = serde_json::json!({
+                "backup_type":"SCHEDULED",
+                "app_version":app_version,
+                "schedule_id":schedule_id,
+                "retention_count":retention,
+            });
+            let payload_json = serde_json::to_string(&payload)?;
+            let request_digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({
+                "job_type":"BACKUP_CREATE",
+                "payload":payload,
+                "progress_total":1,
+                "cancellable":true,
+                "max_attempts":3,
+                "branch_id":context.branch_id,
+            }))?);
+            tx.execute(
+                "INSERT INTO background_jobs(id,tenant_id,branch_id,job_type,state,progress_current,progress_total,cancellable,payload_json,created_by_user_id,created_at,updated_at,origin_device_id,operation_id,request_sha256,attempts,max_attempts,not_before) VALUES(?1,?2,?3,'BACKUP_CREATE','QUEUED',0,1,1,?4,?5,?6,?6,?7,?1,?8,0,3,?6)",
+                params![job_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),payload_json,user.to_string(),now.to_rfc3339(),context.device_id.to_string(),request_digest],
+            )?;
+            tx.execute(
+                "INSERT INTO background_job_events(id,tenant_id,branch_id,job_id,operation_id,event_type,previous_state,new_state,device_id,user_id,evidence_json,created_at) VALUES(?1,?2,?3,?4,?4,'ENQUEUED',NULL,'QUEUED',?5,?6,?7,?8)",
+                params![Uuid::new_v4().to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),job_id.to_string(),context.device_id.to_string(),user.to_string(),serde_json::json!({"job_type":"BACKUP_CREATE","schedule_id":schedule_id}).to_string(),now.to_rfc3339()],
+            )?;
+            tx.execute(
+                "UPDATE backup_schedules SET next_run_at=?2,last_enqueued_at=?3,version=version+1,updated_at=?3 WHERE id=?1 AND state='ACTIVE'",
+                params![schedule, advanced.to_rfc3339(), now.to_rfc3339()],
+            )?;
+            Self::append_backup_schedule_event(
+                &tx,
+                context,
+                user,
+                operation_id,
+                schedule_id,
+                "JOB_ENQUEUED",
+                Some(&state),
+                &state,
+                &serde_json::json!({"job_id":job_id,"scheduled_for":next_run,"next_run_at":advanced}),
+                now,
+            )?;
+            Self::append_audit(
+                &tx,
+                context.tenant_id,
+                context.device_id,
+                user,
+                "SCHEDULED_BACKUP_ENQUEUED",
+                "background_job",
+                &job_id.to_string(),
+                &serde_json::json!({"schedule_id":schedule_id,"scheduled_for":next_run})
+                    .to_string(),
+                now,
+            )?;
+            result.enqueued += 1;
+            result.job_ids.push(job_id);
+        }
+        Self::record_backup_schedule_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "ENQUEUE_DUE",
+            &digest,
+            &result,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     pub fn create_verified_backup(
         &mut self,
         request: BackupCreateRequest,
@@ -461,7 +788,7 @@ impl Store {
             )
             .optional()?;
         if owner.is_none() {
-            return Err(StoreError::Authorization("owner role required for restore"));
+            return Err(StoreError::Authorization("owner role required"));
         }
         Ok(())
     }
@@ -558,6 +885,70 @@ impl Store {
         tx.execute(
             "INSERT INTO backup_operation_results(tenant_id,operation_id,action,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5,?6)",
             params![tenant.to_string(), operation.to_string(), action, digest, serde_json::to_string(result)?, now.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    fn load_backup_schedule_operation<T: DeserializeOwned>(
+        &self,
+        tenant: TenantId,
+        operation: OperationId,
+        action: &str,
+        digest: &str,
+    ) -> Result<Option<T>, StoreError> {
+        let row: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT action,request_sha256,result_json FROM backup_schedule_operation_results WHERE tenant_id=?1 AND operation_id=?2",
+                params![tenant.to_string(), operation.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((stored_action, stored_digest, result))
+                if stored_action == action && stored_digest == digest =>
+            {
+                Ok(Some(serde_json::from_str(&result)?))
+            }
+            Some(_) => Err(StoreError::Conflict(
+                "backup schedule operation id was reused with a different request".into(),
+            )),
+        }
+    }
+
+    fn record_backup_schedule_operation<T: Serialize>(
+        tx: &Transaction<'_>,
+        tenant: TenantId,
+        operation: OperationId,
+        action: &str,
+        digest: &str,
+        result: &T,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        tx.execute(
+            "INSERT INTO backup_schedule_operation_results(tenant_id,operation_id,action,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![tenant.to_string(),operation.to_string(),action,digest,serde_json::to_string(result)?,now.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_backup_schedule_event(
+        tx: &Transaction<'_>,
+        context: LocalTerminalContext,
+        user: UserId,
+        operation: OperationId,
+        schedule_id: Uuid,
+        event_type: &str,
+        previous_state: Option<&str>,
+        new_state: &str,
+        evidence: &serde_json::Value,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        tx.execute(
+            "INSERT INTO backup_schedule_events(id,tenant_id,branch_id,schedule_id,operation_id,event_type,previous_state,new_state,device_id,user_id,evidence_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![Uuid::new_v4().to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),schedule_id.to_string(),operation.to_string(),event_type,previous_state,new_state,context.device_id.to_string(),user.to_string(),evidence.to_string(),now.to_rfc3339()],
         )?;
         Ok(())
     }

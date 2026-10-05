@@ -9,9 +9,10 @@ use bhaipos_core::{
 };
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
-    BackupCreateRequest as StoreBackupCreateRequest, CartSnapshot, CashMovementKind,
-    CashMovementRequest as StoreCashMovementRequest, CashMovementResult, CashSessionReport,
-    CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
+    BackupCreateRequest as StoreBackupCreateRequest,
+    BackupScheduleRequest as StoreBackupScheduleRequest, BackupScheduleResult, CartSnapshot,
+    CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
+    CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
     FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
     LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
@@ -19,7 +20,7 @@ use bhaipos_store::{
     RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
     RestoreResult, Store,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -37,6 +38,7 @@ struct AppState {
     store: Mutex<Store>,
     terminal: Mutex<Option<LocalTerminalContext>>,
     session: Mutex<Option<AuthenticatedSession>>,
+    last_backup_schedule_tick: Mutex<Option<DateTime<Utc>>>,
     backup_directory: PathBuf,
 }
 
@@ -195,6 +197,17 @@ struct TransitionOperationalAlertRequest {
 #[serde(rename_all = "camelCase")]
 struct CreateBackupRequest {
     operation_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigureBackupScheduleRequest {
+    operation_id: String,
+    interval_minutes: i64,
+    retention_count: i64,
+    enabled: bool,
+    first_run_at: String,
+    authorization_valid_days: i64,
 }
 
 #[derive(Deserialize)]
@@ -817,6 +830,33 @@ fn create_verified_backup(
 }
 
 #[tauri::command]
+fn configure_backup_schedule(
+    state: State<'_, AppState>,
+    request: ConfigureBackupScheduleRequest,
+) -> Result<BackupScheduleResult, String> {
+    let session = require_session(&state)?;
+    let first_run_at = DateTime::parse_from_rfc3339(&request.first_run_at)
+        .map_err(|_| "invalid first run time".to_string())?
+        .with_timezone(&Utc);
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .configure_backup_schedule(StoreBackupScheduleRequest {
+            context: session.terminal,
+            user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
+            interval_minutes: request.interval_minutes,
+            retention_count: request.retention_count,
+            enabled: request.enabled,
+            first_run_at,
+            authorization_valid_days: request.authorization_valid_days,
+            now: Utc::now(),
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
 fn preview_verified_restore(
     state: State<'_, AppState>,
     request: PreviewRestoreRequest,
@@ -969,40 +1009,78 @@ struct BackupJobPayload {
 
 fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
     let state = handle.state::<AppState>();
+    let terminal = state
+        .terminal
+        .lock()
+        .map_err(|_| "terminal state poisoned".to_string())?
+        .as_ref()
+        .copied();
+    let Some(terminal) = terminal else {
+        return Ok(());
+    };
     let session = state
         .session
         .lock()
         .map_err(|_| "session state poisoned".to_string())?
         .as_ref()
         .copied();
-    let Some(session) = session else {
-        return Ok(());
-    };
     let now = Utc::now();
+    let should_tick_schedule = {
+        let mut last_tick = state
+            .last_backup_schedule_tick
+            .lock()
+            .map_err(|_| "backup schedule state poisoned".to_string())?;
+        let due = last_tick.map_or(true, |previous| {
+            now.signed_duration_since(previous).num_seconds() >= 60
+        });
+        if due {
+            *last_tick = Some(now);
+        }
+        due
+    };
     let lease = {
         let mut store = state
             .store
             .lock()
             .map_err(|_| "database state poisoned".to_string())?;
-        store
-            .recover_expired_background_jobs(
-                session.terminal,
-                session.user_id,
-                OperationId::new(),
-                now,
-            )
-            .map_err(command_error)?;
-        store
-            .claim_next_background_job(
-                session.terminal,
-                session.user_id,
-                OperationId::new(),
-                1_800,
-                now,
-            )
-            .map_err(command_error)?
+        if should_tick_schedule {
+            store
+                .enqueue_due_backup_jobs(
+                    terminal,
+                    OperationId::new(),
+                    env!("CARGO_PKG_VERSION"),
+                    now,
+                )
+                .map_err(command_error)?;
+        }
+        if let Some(session) = session {
+            if should_tick_schedule {
+                store
+                    .recover_expired_background_jobs(
+                        session.terminal,
+                        session.user_id,
+                        OperationId::new(),
+                        now,
+                    )
+                    .map_err(command_error)?;
+            }
+            store
+                .claim_next_background_job(
+                    session.terminal,
+                    session.user_id,
+                    OperationId::new(),
+                    1_800,
+                    now,
+                )
+                .map_err(command_error)?
+        } else {
+            store
+                .claim_next_scheduled_backup_job(terminal, OperationId::new(), 1_800, now)
+                .map_err(command_error)?
+        }
     };
     let Some(lease) = lease else { return Ok(()) };
+    let authority_user = lease.user_id;
     let outcome = if lease.job_type == "BACKUP_CREATE" {
         match serde_json::from_str::<BackupJobPayload>(&lease.payload_json) {
             Err(error) => BackgroundJobFinishOutcome::RequiresReview {
@@ -1014,8 +1092,8 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                     .lock()
                     .map_err(|_| "database state poisoned".to_string())?
                     .heartbeat_background_job(
-                        session.terminal,
-                        session.user_id,
+                        terminal,
+                        authority_user,
                         OperationId::new(),
                         lease.job_id,
                         lease.lease_token,
@@ -1034,8 +1112,8 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                         .lock()
                         .map_err(|_| "database state poisoned".to_string())?
                         .create_verified_backup(StoreBackupCreateRequest {
-                            context: session.terminal,
-                            user_id: session.user_id,
+                            context: terminal,
+                            user_id: authority_user,
                             operation_id: OperationId(lease.job_id),
                             backup_type: payload.backup_type,
                             destination_directory: state.backup_directory.clone(),
@@ -1063,8 +1141,8 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|_| "database state poisoned".to_string())?
         .finish_background_job(
-            session.terminal,
-            session.user_id,
+            terminal,
+            authority_user,
             OperationId::new(),
             lease.job_id,
             lease.lease_token,
@@ -1090,6 +1168,7 @@ fn main() {
                 store: Mutex::new(store),
                 terminal: Mutex::new(terminal),
                 session: Mutex::new(None),
+                last_backup_schedule_tick: Mutex::new(None),
                 backup_directory: data_dir.join("backups"),
             });
             let handle = app.handle().clone();
@@ -1133,6 +1212,7 @@ fn main() {
             list_operational_alerts,
             transition_operational_alert,
             create_verified_backup,
+            configure_backup_schedule,
             preview_verified_restore,
             restore_verified_backup,
         ])
