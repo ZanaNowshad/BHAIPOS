@@ -6,6 +6,7 @@
 use super::*;
 
 type ClaimableBackgroundJobRow = (String, String, String, i64, i64, i64, Option<i64>, i32);
+type ScheduledBackupJobRow = (String, String, String, i64, i64, i64, Option<i64>, String);
 
 impl Store {
     pub fn enqueue_background_job(
@@ -255,16 +256,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let row: Option<(
-            String,
-            String,
-            String,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            String,
-        )> = tx
+        let row: Option<ScheduledBackupJobRow> = tx
             .query_row(
                 "SELECT j.id,j.job_type,j.payload_json,j.attempts,j.max_attempts,j.progress_current,j.progress_total,j.created_by_user_id FROM background_jobs j JOIN backup_schedules s ON s.id=json_extract(j.payload_json,'$.schedule_id') JOIN users u ON u.id=j.created_by_user_id AND u.tenant_id=j.tenant_id AND u.status='ACTIVE' WHERE j.tenant_id=?1 AND j.branch_id=?2 AND j.origin_device_id=?3 AND j.job_type='BACKUP_CREATE' AND j.state='QUEUED' AND datetime(COALESCE(j.retry_after,j.not_before,j.created_at))<=datetime(?4) AND s.tenant_id=j.tenant_id AND s.branch_id=j.branch_id AND s.device_id=?3 AND s.state='ACTIVE' AND s.authorized_by_user_id=j.created_by_user_id AND datetime(s.authorization_expires_at)>datetime(?4) AND (SELECT COUNT(DISTINCT rp.permission_code) FROM user_roles ur JOIN roles role ON role.id=ur.role_id AND role.tenant_id=j.tenant_id JOIN role_permissions rp ON rp.role_id=role.id WHERE ur.user_id=j.created_by_user_id AND (ur.branch_id IS NULL OR ur.branch_id=j.branch_id) AND rp.permission_code IN ('backup.create','job.enqueue','job.execute'))=3 ORDER BY datetime(COALESCE(j.retry_after,j.not_before,j.created_at)),j.created_at,j.id LIMIT 1",
                 params![context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),now.to_rfc3339()],
