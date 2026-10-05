@@ -552,8 +552,7 @@ fn scheduled_backup_retention_is_replay_safe_and_preserves_restore_evidence() {
             now,
         })
         .unwrap();
-    let directory =
-        std::env::temp_dir().join(format!("bhaipos-retention-test-{}", Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("bhaipos-retention-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let mut backups = Vec::new();
     for offset in 0..4 {
