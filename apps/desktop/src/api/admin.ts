@@ -40,7 +40,37 @@ export type BackupScheduleResult = {
   version: number;
 };
 
+export type OperationalDiagnostics = {
+  tenant_id: string;
+  branch_id: string;
+  device_id: string;
+  register_id: string;
+  schema_version: string;
+  database_integrity: string;
+  foreign_key_violations: number;
+  device_status: string;
+  device_app_version: string | null;
+  last_heartbeat_at: string | null;
+  pending_sync_mutations: number;
+  sync_requires_review: number;
+  last_sync_at: string | null;
+  pending_background_jobs: number;
+  background_jobs_requires_review: number;
+  failed_print_jobs: number;
+  printer_configured: boolean;
+  latest_backup: null | { backup_id:string; backup_type:string; state:string; integrity_state:string|null; created_at:string };
+  backup_schedule: null | { state:string; next_run_at:string; authorization_expires_at:string; retention_count:number };
+  application_version: string;
+  build_sha: string | null;
+  database_path: string;
+  backup_directory: string;
+  hub_mode: string;
+  whatsapp_status: string;
+  ocr_status: string;
+};
+
 export const adminApi = {
+  diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (

@@ -745,6 +745,68 @@ fn scheduled_backup_retention_is_replay_safe_and_preserves_restore_evidence() {
     std::fs::remove_dir_all(outside_directory).unwrap();
 }
 
+#[test]
+fn diagnostics_are_permission_scoped_integrity_checked_and_redacted() {
+    let mut f = fixture();
+    let now = t("2026-10-05T12:00:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let denied = f
+        .store
+        .operational_diagnostics(context, f.user)
+        .unwrap_err();
+    assert!(matches!(
+        denied,
+        StoreError::Authorization("diagnostics.view")
+    ));
+
+    let diagnostics_role = Uuid::new_v4();
+    f.store
+        .create_role(diagnostics_role, f.tenant, "diagnostics")
+        .unwrap();
+    f.store
+        .grant_permission(diagnostics_role, "diagnostics.view")
+        .unwrap();
+    f.store
+        .assign_role(f.user, diagnostics_role, Some(f.branch))
+        .unwrap();
+    f.store
+        .enqueue_background_job(BackgroundJobEnqueueRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId::new(),
+            job_type: "IMPORT".into(),
+            payload_json: "{}".into(),
+            progress_total: None,
+            cancellable: true,
+            max_attempts: 3,
+            not_before: None,
+            now,
+        })
+        .unwrap();
+
+    let diagnostics = f.store.operational_diagnostics(context, f.user).unwrap();
+    assert_eq!(diagnostics.tenant_id, f.tenant);
+    assert_eq!(diagnostics.branch_id, f.branch);
+    assert_eq!(diagnostics.device_id, f.device);
+    assert_eq!(diagnostics.register_id, f.register);
+    assert_eq!(diagnostics.schema_version, bhaipos_store::LATEST_SCHEMA);
+    assert_eq!(diagnostics.database_integrity, "ok");
+    assert_eq!(diagnostics.foreign_key_violations, 0);
+    assert_eq!(diagnostics.pending_background_jobs, 1);
+
+    let serialized = serde_json::to_string(&diagnostics)
+        .unwrap()
+        .to_ascii_lowercase();
+    for forbidden in ["pin", "credential", "secret", "cookie", "token"] {
+        assert!(!serialized.contains(forbidden), "leaked {forbidden}");
+    }
+}
+
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {
     let c = CartId::new();
     f.store

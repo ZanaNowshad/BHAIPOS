@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
+import { adminApi, type OperationalDiagnostics, type RestorePreview } from './api/admin';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
-type Phase = 'loading'|'setup'|'login'|'cashier'|'admin';
+type Phase = 'loading'|'setup'|'login'|'cashier'|'admin'|'diagnostics';
 type Tender = Payment['kind'];
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -20,6 +21,9 @@ export function App() {
   const [cashSessionId,setCashSessionId]=useState<string|null>(null);
   const [canViewAlerts,setCanViewAlerts]=useState(false);
   const [canManageAlerts,setCanManageAlerts]=useState(false);
+  const [canViewDiagnostics,setCanViewDiagnostics]=useState(false);
+  const [diagnostics,setDiagnostics]=useState<OperationalDiagnostics|null>(null);
+  const [restorePreview,setRestorePreview]=useState<RestorePreview|null>(null);
   const [alerts,setAlerts]=useState<OperationalAlert[]>([]);
   const [cart,setCart]=useState<CartSnapshot|null>(null);
   const [selected,setSelected]=useState<string|null>(null);
@@ -43,9 +47,42 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
+  }
+
+  async function showDiagnostics(){
+    try{setDiagnostics(await adminApi.diagnostics());setPhase('diagnostics');setNotice('Live redacted diagnostics loaded');}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function createBackup(){
+    try{const job=await adminApi.createBackup(crypto.randomUUID());setNotice(`Backup queued · ${job.job_id.slice(0,8)}`);setDiagnostics(await adminApi.diagnostics());}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function configureSchedule(){
+    const interval=window.prompt('Backup interval in hours','24');if(interval===null)return;
+    const retention=window.prompt('Verified scheduled backups to retain','7');if(retention===null)return;
+    const intervalMinutes=Math.round(Number(interval)*60);const retentionCount=Number(retention);
+    if(!Number.isInteger(intervalMinutes)||!Number.isInteger(retentionCount)) {setNotice('Interval and retention must be whole supported values');return;}
+    try{await adminApi.configureBackupSchedule(crypto.randomUUID(),intervalMinutes,retentionCount,true,new Date().toISOString(),30);setDiagnostics(await adminApi.diagnostics());setNotice('Backup schedule configured');}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function previewLatestRestore(){
+    if(!diagnostics?.latest_backup)return;
+    try{setRestorePreview(await adminApi.previewRestore(diagnostics.latest_backup.backup_id));setNotice('Restore preview verified');}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function restoreLatest(){
+    if(!restorePreview)return;
+    const confirmation=window.prompt('Type RESTORE to replace the local database after a safety backup','');
+    if(confirmation!=='RESTORE'){setNotice('Restore cancelled');return;}
+    try{await adminApi.restoreBackup(crypto.randomUUID(),restorePreview.backup_id,restorePreview.sha256);setRestorePreview(null);setDiagnostics(await adminApi.diagnostics());setNotice('Verified restore completed');}
+    catch(error){setNotice(message(error));}
   }
 
   async function showAlertCentre(){
@@ -147,19 +184,20 @@ export function App() {
     catch(error){setNotice(message(error));}
   }
 
-  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setAlerts([]);setPhase('login');setNotice('Terminal locked');}
+  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setAlerts([]);setDiagnostics(null);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
 
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
   if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
+  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} preview={restorePreview} notice={notice} canViewAlerts={canViewAlerts} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
 
   return <div className="app-shell">
     <header className="topbar">
-      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0022</span></div>
+      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0023</span></div>
       <div className="status"><span className="dot"/>{notice}</div>
-      <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
+      <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}{canViewDiagnostics&&<button onClick={showDiagnostics}>Diagnostics</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
     </header>
     <main className="cashier-grid">
       <section className="selling-panel">
@@ -188,9 +226,9 @@ export function App() {
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
 }
 
@@ -203,6 +241,19 @@ function AlertCentre({alerts,canManage,notice,onTransition,onRefresh,onCashier,o
         <div className="alert-copy"><div><span className="alert-severity">{alert.severity}</span><span className="alert-type">{alert.alert_type.replaceAll('_',' ')}</span></div><h2>{alert.title}</h2><p>{alert.status.replace('_',' ')} · {new Date(alert.created_at).toLocaleString()}</p></div>
         {canManage&&<div className="alert-actions">{alert.status==='NEW'&&action(alert,'ACKNOWLEDGED','Acknowledge')}{alert.status==='ACKNOWLEDGED'&&<>{action(alert,'IN_PROGRESS','Investigate')}{action(alert,'DISMISSED','Dismiss')}</>}{alert.status==='IN_PROGRESS'&&<>{action(alert,'RESOLVED','Resolve')}{action(alert,'DISMISSED','Dismiss')}</>}</div>}
       </article>)}</section>
+    </main>
+  </div>;
+}
+
+function DiagnosticsCentre({diagnostics,preview,notice,canViewAlerts,onAlerts,onRefresh,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;preview:RestorePreview|null;notice:string;canViewAlerts:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
+  const healthy=diagnostics.database_integrity==='ok'&&diagnostics.foreign_key_violations===0;
+  return <div className="admin-shell">
+    <nav className="admin-nav"><h2>BHAIPOS</h2><button className="cashier-return" onClick={onCashier}>Return to Cashier</button>{canViewAlerts&&<button onClick={onAlerts}>Alert Centre</button>}<button className="active">Diagnostics</button><button onClick={onRefresh}>Refresh</button><button onClick={onLock}>Lock Terminal</button></nav>
+    <main className="admin-main"><header><div><span className="eyebrow">Redacted trusted-terminal evidence</span><h1>Diagnostics & Backups</h1><p>{notice}</p></div><span className="badge">{healthy?'Database healthy':'Review required'}</span></header>
+      <section className="metric-grid"><article><span>Schema</span><strong>{diagnostics.schema_version}</strong></article><article><span>Device</span><strong>{diagnostics.device_status}</strong></article><article><span>Pending jobs</span><strong>{diagnostics.pending_background_jobs}</strong></article><article><span>Sync review</span><strong>{diagnostics.sync_requires_review}</strong></article></section>
+      <section className="admin-panels"><article><h2>Database</h2><dl className="diagnostic-list"><dt>Integrity</dt><dd>{diagnostics.database_integrity}</dd><dt>Foreign-key violations</dt><dd>{diagnostics.foreign_key_violations}</dd><dt>Path</dt><dd>{diagnostics.database_path}</dd><dt>Build</dt><dd>{diagnostics.build_sha??'development build'}</dd><dt>Application</dt><dd>{diagnostics.application_version}</dd></dl></article><article><h2>Terminal</h2><dl className="diagnostic-list"><dt>Device ID</dt><dd>{diagnostics.device_id}</dd><dt>Register ID</dt><dd>{diagnostics.register_id}</dd><dt>Last heartbeat</dt><dd>{diagnostics.last_heartbeat_at??'not reported'}</dd><dt>Printer profile</dt><dd>{diagnostics.printer_configured?'configured':'missing'}</dd><dt>Failed prints</dt><dd>{diagnostics.failed_print_jobs}</dd><dt>Hub mode</dt><dd>{diagnostics.hub_mode}</dd></dl></article></section>
+      <section className="admin-panels"><article><h2>Backup authority</h2><p>{diagnostics.backup_schedule?`${diagnostics.backup_schedule.state} · next ${diagnostics.backup_schedule.next_run_at} · retain ${diagnostics.backup_schedule.retention_count}`:'No scheduled backup configured'}</p><div className="admin-actions"><button className="primary" onClick={onBackup}>Create verified backup</button><button onClick={onSchedule}>Configure schedule</button></div><small>Trusted directory: {diagnostics.backup_directory}</small></article><article><h2>Latest verified evidence</h2>{diagnostics.latest_backup?<><p>{diagnostics.latest_backup.backup_type} · {diagnostics.latest_backup.state} · {diagnostics.latest_backup.integrity_state??'unknown integrity'}</p><small>{diagnostics.latest_backup.created_at} · {diagnostics.latest_backup.backup_id}</small><div className="admin-actions"><button onClick={onPreview}>Verify restore preview</button>{preview?.compatible&&<button className="danger" onClick={onRestore}>Restore after safety backup</button>}</div>{preview&&<p>SHA-256 {preview.sha256} · {preview.byte_size} bytes · schema {preview.schema_version}</p>}</>:<p>No backup evidence exists yet.</p>}</article></section>
+      <section className="admin-panels"><article><h2>Synchronization</h2><dl className="diagnostic-list"><dt>Pending mutations</dt><dd>{diagnostics.pending_sync_mutations}</dd><dt>Requires review</dt><dd>{diagnostics.sync_requires_review}</dd><dt>Last checkpoint</dt><dd>{diagnostics.last_sync_at??'never'}</dd></dl></article><article><h2>Optional modules</h2><dl className="diagnostic-list"><dt>WhatsApp</dt><dd>{diagnostics.whatsapp_status}</dd><dt>OCR</dt><dd>{diagnostics.ocr_status}</dd><dt>Jobs requiring review</dt><dd>{diagnostics.background_jobs_requires_review}</dd></dl></article></section>
     </main>
   </div>;
 }

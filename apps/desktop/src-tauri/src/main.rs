@@ -16,9 +16,9 @@ use bhaipos_store::{
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
     FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
     LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
-    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
-    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
-    RestoreResult, Store,
+    OperationalDiagnostics, PaymentInput, RefundLineInput, RefundQuote,
+    RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
+    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,7 @@ struct AppState {
     terminal: Mutex<Option<LocalTerminalContext>>,
     session: Mutex<Option<AuthenticatedSession>>,
     last_backup_schedule_tick: Mutex<Option<DateTime<Utc>>>,
+    database_path: PathBuf,
     backup_directory: PathBuf,
 }
 
@@ -79,6 +80,20 @@ struct LoginResponse {
     cash_session_id: Option<String>,
     can_view_alerts: bool,
     can_manage_alerts: bool,
+    can_view_diagnostics: bool,
+}
+
+#[derive(Serialize)]
+struct DesktopDiagnostics {
+    #[serde(flatten)]
+    operational: OperationalDiagnostics,
+    application_version: &'static str,
+    build_sha: Option<&'static str>,
+    database_path: String,
+    backup_directory: String,
+    hub_mode: &'static str,
+    whatsapp_status: &'static str,
+    ocr_status: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -375,6 +390,9 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_manage_alerts = store
         .user_has_permission(terminal, user_id, "alert.manage")
         .map_err(command_error)?;
+    let can_view_diagnostics = store
+        .user_has_permission(terminal, user_id, "diagnostics.view")
+        .map_err(command_error)?;
     *state
         .session
         .lock()
@@ -388,6 +406,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         cash_session_id: cash_session_id.map(|id| id.to_string()),
         can_view_alerts,
         can_manage_alerts,
+        can_view_diagnostics,
     })
 }
 
@@ -897,6 +916,27 @@ fn restore_verified_backup(
         .map_err(command_error)
 }
 
+#[tauri::command]
+fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiagnostics, String> {
+    let session = require_session(&state)?;
+    let operational = state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .operational_diagnostics(session.terminal, session.user_id)
+        .map_err(command_error)?;
+    Ok(DesktopDiagnostics {
+        operational,
+        application_version: env!("CARGO_PKG_VERSION"),
+        build_sha: option_env!("BHAIPOS_BUILD_SHA"),
+        database_path: state.database_path.to_string_lossy().into_owned(),
+        backup_directory: state.backup_directory.to_string_lossy().into_owned(),
+        hub_mode: "LOCAL_ONLY",
+        whatsapp_status: "DISABLED",
+        ocr_status: "DISABLED",
+    })
+}
+
 fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
     let state = handle.state::<AppState>();
     let terminal = state
@@ -1225,6 +1265,7 @@ fn main() {
                 terminal: Mutex::new(terminal),
                 session: Mutex::new(None),
                 last_backup_schedule_tick: Mutex::new(None),
+                database_path: db_path,
                 backup_directory: data_dir.join("backups"),
             });
             let handle = app.handle().clone();
@@ -1271,6 +1312,7 @@ fn main() {
             configure_backup_schedule,
             preview_verified_restore,
             restore_verified_backup,
+            get_operational_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("BHAIPOS desktop runtime failed");
