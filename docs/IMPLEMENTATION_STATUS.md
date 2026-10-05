@@ -46,6 +46,8 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `37261516269` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the trusted backup administration bridge and durable backup worker dispatch.
+- Manual backup commands enqueue durable jobs without accepting renderer-provided authority or filesystem paths. The trusted worker recovers expired jobs, honors cancellation, reuses the job identity for replay-safe backup creation and routes unsupported/semantic failures to review.
 - GitHub Actions run `37260286733` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for verified WAL-aware backup and restore.
 - Backups use SQLite's online backup API, streaming SHA-256, full integrity and foreign-key checks, exact tenant/terminal compatibility and payload-bound replay. Owner-only restore requires a matching preview hash, creates a verified pre-restore safety backup, and stages the restored database together with immutable restore/idempotency/audit evidence before replacing the live image.
 - GitHub Actions runs `37240547597` and `37258354228` pass Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the durable background-job engine and expanded lost-response replay assertions.
@@ -126,7 +128,7 @@ Product/category scheduling; branch/channel pricing APIs; price/cost history com
 - OCR engine/provider integration and review UI.
 - AI provider adapters, tool registry, risk classifier, confirmation UX, compensating/undo executor and knowledge retrieval.
 - Windows Credential Manager integration for secrets.
-- Backup scheduling/retention, trusted desktop commands/UI, encryption/key custody and Windows crash-interruption exercise.
+- Backup scheduling/retention, administration UI, encryption/key custody and Windows crash-interruption exercise. Narrow trusted commands and durable manual-backup dispatch are implemented.
 - Import/migration wizard and spreadsheet injection sanitizer.
 - Reports/analytics query layer and export generators.
 - Signed updater and rollback behavior.
