@@ -242,22 +242,12 @@ impl Store {
             user_id: request.user_id,
             operation_id: safety_operation,
             backup_type: "PRE_RESTORE".into(),
-            destination_directory: safety_directory,
+            destination_directory: safety_directory.clone(),
             app_version: request.app_version.clone(),
             now: request.now,
         })?;
         let safety_record =
             self.backup_record(request.context.tenant_id, safety_result.backup_id)?;
-
-        let source = Connection::open(&source_record.storage_path)?;
-        {
-            let backup = Backup::new(&source, &mut self.conn)?;
-            backup.run_to_completion(128, Duration::from_millis(5), None)?;
-        }
-        drop(source);
-        self.migrate()?;
-        self.validate_local_session(request.context, request.user_id)?;
-        self.assert_owner(request.context, request.user_id)?;
 
         let restore_id = request.operation_id.0;
         let result = RestoreResult {
@@ -267,58 +257,98 @@ impl Store {
             restored_sha256: preview.sha256.clone(),
             completed_at: request.now.to_rfc3339(),
         };
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::insert_backup_record_evidence(&tx, &source_record)?;
-        Self::insert_backup_record_evidence(&tx, &safety_record)?;
-        tx.execute(
-            "INSERT INTO restore_runs(id,tenant_id,backup_id,pre_restore_backup_id,state,compatibility_json,authorized_by_user_id,started_at,completed_at,result_json,branch_id,origin_device_id,operation_id) VALUES(?1,?2,?3,?4,'SUCCEEDED',?5,?6,?7,?7,?8,?9,?10,?11)",
-            params![
-                restore_id.to_string(),
-                request.context.tenant_id.to_string(),
-                request.backup_id.to_string(),
-                safety_result.backup_id.to_string(),
-                serde_json::json!({"compatible":true,"schema_version":preview.schema_version,"sha256":preview.sha256}).to_string(),
-                request.user_id.to_string(),
-                request.now.to_rfc3339(),
-                serde_json::to_string(&result)?,
-                request.context.branch_id.to_string(),
-                request.context.device_id.to_string(),
-                request.operation_id.to_string(),
-            ],
-        )?;
-        Self::append_backup_event(
-            &tx,
-            request.context,
-            request.user_id,
-            Some(request.backup_id),
-            Some(restore_id),
-            "RESTORE_SUCCEEDED",
-            &serde_json::json!({"pre_restore_backup_id":safety_result.backup_id,"restored_sha256":result.restored_sha256}),
-            request.now,
-        )?;
-        Self::record_backup_operation(
-            &tx,
-            request.context.tenant_id,
-            request.operation_id,
-            "RESTORE",
-            &digest,
-            &result,
-            request.now,
-        )?;
-        Self::append_audit(
-            &tx,
-            request.context.tenant_id,
-            request.context.device_id,
-            request.user_id,
-            "BACKUP_RESTORED",
-            "restore_run",
-            &restore_id.to_string(),
-            &serde_json::to_string(&result)?,
-            request.now,
-        )?;
-        tx.commit()?;
+
+        // Build a complete, verified restore image before touching the live
+        // database. If the process stops during the final SQLite backup, the
+        // destination transaction leaves either the old image or this image,
+        // which already contains its idempotency and audit evidence.
+        let staged_path = safety_directory.join(format!(".{restore_id}.restore-stage"));
+        if staged_path.exists() {
+            fs::remove_file(&staged_path)?;
+        }
+        let stage_result = (|| -> Result<(), StoreError> {
+            let source = Connection::open(&source_record.storage_path)?;
+            let mut staged = Connection::open(&staged_path)?;
+            {
+                let backup = Backup::new(&source, &mut staged)?;
+                backup.run_to_completion(128, Duration::from_millis(5), None)?;
+            }
+            drop(source);
+            {
+                let tx = staged.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                Self::insert_backup_record_evidence(&tx, &source_record)?;
+                Self::insert_backup_record_evidence(&tx, &safety_record)?;
+                tx.execute(
+                    "INSERT INTO restore_runs(id,tenant_id,backup_id,pre_restore_backup_id,state,compatibility_json,authorized_by_user_id,started_at,completed_at,result_json,branch_id,origin_device_id,operation_id) VALUES(?1,?2,?3,?4,'SUCCEEDED',?5,?6,?7,?7,?8,?9,?10,?11)",
+                    params![
+                        restore_id.to_string(),
+                        request.context.tenant_id.to_string(),
+                        request.backup_id.to_string(),
+                        safety_result.backup_id.to_string(),
+                        serde_json::json!({"compatible":true,"schema_version":preview.schema_version,"sha256":preview.sha256}).to_string(),
+                        request.user_id.to_string(),
+                        request.now.to_rfc3339(),
+                        serde_json::to_string(&result)?,
+                        request.context.branch_id.to_string(),
+                        request.context.device_id.to_string(),
+                        request.operation_id.to_string(),
+                    ],
+                )?;
+                Self::append_backup_event(
+                    &tx,
+                    request.context,
+                    request.user_id,
+                    Some(request.backup_id),
+                    Some(restore_id),
+                    "RESTORE_SUCCEEDED",
+                    &serde_json::json!({"pre_restore_backup_id":safety_result.backup_id,"restored_sha256":result.restored_sha256}),
+                    request.now,
+                )?;
+                Self::record_backup_operation(
+                    &tx,
+                    request.context.tenant_id,
+                    request.operation_id,
+                    "RESTORE",
+                    &digest,
+                    &result,
+                    request.now,
+                )?;
+                Self::append_audit(
+                    &tx,
+                    request.context.tenant_id,
+                    request.context.device_id,
+                    request.user_id,
+                    "BACKUP_RESTORED",
+                    "restore_run",
+                    &restore_id.to_string(),
+                    &serde_json::to_string(&result)?,
+                    request.now,
+                )?;
+                tx.commit()?;
+            }
+            drop(staged);
+            Self::verify_backup_database(
+                &staged_path,
+                request.context,
+                request.user_id,
+                true,
+            )?;
+            let staged_source = Connection::open(&staged_path)?;
+            {
+                let backup = Backup::new(&staged_source, &mut self.conn)?;
+                backup.run_to_completion(128, Duration::from_millis(5), None)?;
+            }
+            drop(staged_source);
+            Ok(())
+        })();
+        if stage_result.is_err() && staged_path.exists() {
+            let _ = fs::remove_file(&staged_path);
+        }
+        stage_result?;
+        let _ = fs::remove_file(&staged_path);
+        self.migrate()?;
+        self.validate_local_session(request.context, request.user_id)?;
+        self.assert_owner(request.context, request.user_id)?;
         Ok(result)
     }
 
