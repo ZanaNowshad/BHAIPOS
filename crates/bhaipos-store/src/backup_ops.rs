@@ -327,12 +327,7 @@ impl Store {
                 tx.commit()?;
             }
             drop(staged);
-            Self::verify_backup_database(
-                &staged_path,
-                request.context,
-                request.user_id,
-                true,
-            )?;
+            Self::verify_backup_database(&staged_path, request.context, request.user_id, true)?;
             let staged_source = Connection::open(&staged_path)?;
             {
                 let backup = Backup::new(&staged_source, &mut self.conn)?;
