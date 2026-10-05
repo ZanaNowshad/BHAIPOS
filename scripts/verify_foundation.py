@@ -21,6 +21,7 @@ UPGRADE_0016=ROOT/'migrations/0016_delivery_courier_operations.sql'
 UPGRADE_0017=ROOT/'migrations/0017_attendance_operations.sql'
 UPGRADE_0018=ROOT/'migrations/0018_operational_alerts.sql'
 UPGRADE_0019=ROOT/'migrations/0019_background_jobs.sql'
+UPGRADE_0020=ROOT/'migrations/0020_backup_restore.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -78,6 +79,19 @@ def apply_schema(con, include_payload_binding=True):
         for col,ddl in job_upgrades.items():
             if col not in job_cols: con.execute(ddl)
         con.executescript(UPGRADE_0019.read_text())
+        additive_columns={
+            ('backup_records','origin_device_id'):'ALTER TABLE backup_records ADD COLUMN origin_device_id TEXT REFERENCES devices(id)',
+            ('backup_records','created_by_user_id'):'ALTER TABLE backup_records ADD COLUMN created_by_user_id TEXT REFERENCES users(id)',
+            ('backup_records','operation_id'):'ALTER TABLE backup_records ADD COLUMN operation_id TEXT',
+            ('backup_records','error_text'):'ALTER TABLE backup_records ADD COLUMN error_text TEXT',
+            ('restore_runs','branch_id'):'ALTER TABLE restore_runs ADD COLUMN branch_id TEXT REFERENCES branches(id)',
+            ('restore_runs','origin_device_id'):'ALTER TABLE restore_runs ADD COLUMN origin_device_id TEXT REFERENCES devices(id)',
+            ('restore_runs','operation_id'):'ALTER TABLE restore_runs ADD COLUMN operation_id TEXT',
+        }
+        for (table,col),ddl in additive_columns.items():
+            if col not in {r[1] for r in con.execute(f'PRAGMA table_info({table})')}:
+                con.execute(ddl)
+        con.executescript(UPGRADE_0020.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -338,7 +352,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0019_background_jobs"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0020_backup_restore"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -397,6 +411,11 @@ for symbol in ['enqueue_background_job','claim_next_background_job','heartbeat_b
     assert symbol in job_ops, symbol
 for trigger in ['guard_background_job_insert','guard_background_job_update','guard_background_job_event_insert','immutable_background_job_events_update']:
     assert trigger in triggers, trigger
+backup_ops=(ROOT/'crates/bhaipos-store/src/backup_ops.rs').read_text()
+for symbol in ['create_verified_backup','preview_restore','restore_verified_backup','integrity_check','foreign_key_check','PRE_RESTORE']:
+    assert symbol in backup_ops, symbol
+for trigger in ['immutable_backup_operation_results_update','immutable_backup_events_update','immutable_backup_records_identity','guard_backup_record_scope','guard_backup_event_scope']:
+    assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
@@ -424,5 +443,6 @@ result={
     'attendance_state_and_evidence_guards': 'ok',
     'operational_alert_state_and_evidence_guards': 'ok',
     'background_job_lifecycle_and_evidence_guards': 'ok',
+    'backup_restore_integrity_and_evidence_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))

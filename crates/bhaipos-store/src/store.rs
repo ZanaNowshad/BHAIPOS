@@ -9,6 +9,7 @@ use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,6 +17,8 @@ use uuid::Uuid;
 mod alert_ops;
 #[path = "attendance_ops.rs"]
 mod attendance_ops;
+#[path = "backup_ops.rs"]
+mod backup_ops;
 #[path = "customer_ops.rs"]
 mod customer_ops;
 #[path = "delivery_ops.rs"]
@@ -52,7 +55,8 @@ const MIGRATION_0016: &str =
 const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_operations.sql");
 const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_alerts.sql");
 const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_jobs.sql");
-pub const LATEST_SCHEMA: &str = "0019_background_jobs";
+const MIGRATION_0020: &str = include_str!("../../../migrations/0020_backup_restore.sql");
+pub const LATEST_SCHEMA: &str = "0020_backup_restore";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -70,6 +74,8 @@ pub enum StoreError {
     Serde(#[from] serde_json::Error),
     #[error("money: {0}")]
     Money(#[from] bhaipos_core::MoneyError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Clone, Debug)]
@@ -306,6 +312,58 @@ pub struct BackgroundJobEnqueueRequest {
     pub max_attempts: i64,
     pub not_before: Option<DateTime<Utc>>,
     pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BackupCreateRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub backup_type: String,
+    pub destination_directory: PathBuf,
+    pub app_version: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupResult {
+    pub backup_id: Uuid,
+    pub storage_path: PathBuf,
+    pub sha256: String,
+    pub byte_size: u64,
+    pub schema_version: String,
+    pub integrity_state: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestorePreview {
+    pub backup_id: Uuid,
+    pub sha256: String,
+    pub byte_size: u64,
+    pub schema_version: String,
+    pub integrity_state: String,
+    pub compatible: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RestoreBackupRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub backup_id: Uuid,
+    pub expected_sha256: String,
+    pub safety_backup_directory: PathBuf,
+    pub app_version: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreResult {
+    pub restore_id: Uuid,
+    pub backup_id: Uuid,
+    pub pre_restore_backup_id: Uuid,
+    pub restored_sha256: String,
+    pub completed_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,6 +949,18 @@ impl Store {
             Self::ensure_column(&self.conn, "background_jobs", column, ddl)?;
         }
         self.conn.execute_batch(MIGRATION_0019)?;
+        for (table, column, ddl) in [
+            ("backup_records", "origin_device_id", "ALTER TABLE backup_records ADD COLUMN origin_device_id TEXT REFERENCES devices(id)"),
+            ("backup_records", "created_by_user_id", "ALTER TABLE backup_records ADD COLUMN created_by_user_id TEXT REFERENCES users(id)"),
+            ("backup_records", "operation_id", "ALTER TABLE backup_records ADD COLUMN operation_id TEXT"),
+            ("backup_records", "error_text", "ALTER TABLE backup_records ADD COLUMN error_text TEXT"),
+            ("restore_runs", "branch_id", "ALTER TABLE restore_runs ADD COLUMN branch_id TEXT REFERENCES branches(id)"),
+            ("restore_runs", "origin_device_id", "ALTER TABLE restore_runs ADD COLUMN origin_device_id TEXT REFERENCES devices(id)"),
+            ("restore_runs", "operation_id", "ALTER TABLE restore_runs ADD COLUMN operation_id TEXT"),
+        ] {
+            Self::ensure_column(&self.conn, table, column, ddl)?;
+        }
+        self.conn.execute_batch(MIGRATION_0020)?;
         Ok(())
     }
     fn ensure_column(
@@ -1063,6 +1133,8 @@ impl Store {
             ("job.execute", "Execute background jobs"),
             ("job.manage", "Cancel and recover background jobs"),
             ("job.view", "View background jobs"),
+            ("backup.create", "Create and verify backups"),
+            ("backup.restore", "Restore verified backups"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
