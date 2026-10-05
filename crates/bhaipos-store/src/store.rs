@@ -57,7 +57,8 @@ const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_
 const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_jobs.sql");
 const MIGRATION_0020: &str = include_str!("../../../migrations/0020_backup_restore.sql");
 const MIGRATION_0021: &str = include_str!("../../../migrations/0021_backup_scheduling.sql");
-pub const LATEST_SCHEMA: &str = "0021_backup_scheduling";
+const MIGRATION_0022: &str = include_str!("../../../migrations/0022_backup_retention.sql");
+pub const LATEST_SCHEMA: &str = "0022_backup_retention";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -396,6 +397,15 @@ pub struct BackupScheduleTickResult {
     pub enqueued: usize,
     pub requires_review: usize,
     pub job_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupRetentionResult {
+    pub run_id: Uuid,
+    pub pruned: usize,
+    pub protected: usize,
+    pub retained: usize,
+    pub failed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -995,6 +1005,7 @@ impl Store {
         }
         self.conn.execute_batch(MIGRATION_0020)?;
         self.conn.execute_batch(MIGRATION_0021)?;
+        self.conn.execute_batch(MIGRATION_0022)?;
         Ok(())
     }
     fn ensure_column(
@@ -1170,6 +1181,7 @@ impl Store {
             ("backup.create", "Create and verify backups"),
             ("backup.restore", "Restore verified backups"),
             ("backup.schedule", "Configure scheduled backups"),
+            ("backup.retention", "Prune scheduled backups"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),

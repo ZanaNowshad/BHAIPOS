@@ -668,7 +668,81 @@ fn scheduled_backup_retention_is_replay_safe_and_preserves_restore_evidence() {
         states.iter().filter(|(_, state)| state == "PRUNED").count(),
         1
     );
+    let outside_directory =
+        std::env::temp_dir().join(format!("bhaipos-retention-outside-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&outside_directory).unwrap();
+    let outside_created_at = now - chrono::Duration::hours(1);
+    let outside_job = f
+        .store
+        .enqueue_background_job(BackgroundJobEnqueueRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId::new(),
+            job_type: "BACKUP_CREATE".into(),
+            payload_json: serde_json::json!({
+                "backup_type":"SCHEDULED",
+                "app_version":"0.1.0",
+                "schedule_id":schedule.schedule_id,
+                "retention_count":2,
+            })
+            .to_string(),
+            progress_total: Some(1),
+            cancellable: true,
+            max_attempts: 3,
+            not_before: None,
+            now: outside_created_at,
+        })
+        .unwrap();
+    let outside_backup = f
+        .store
+        .create_verified_backup(BackupCreateRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId(outside_job.job_id),
+            backup_type: "SCHEDULED".into(),
+            destination_directory: outside_directory.clone(),
+            app_version: "0.1.0".into(),
+            now: outside_created_at,
+        })
+        .unwrap();
+    f.store
+        .record_scheduled_backup_output(
+            context,
+            f.user,
+            schedule.schedule_id,
+            outside_job.job_id,
+            outside_backup.backup_id,
+            outside_created_at,
+        )
+        .unwrap();
+    let escaped = f
+        .store
+        .prune_scheduled_backups(
+            context,
+            f.user,
+            OperationId::new(),
+            schedule.schedule_id,
+            &directory,
+            now + chrono::Duration::hours(3),
+        )
+        .unwrap();
+    assert_eq!(escaped.retained, 2);
+    assert_eq!(escaped.protected, 1);
+    assert_eq!(escaped.pruned, 0);
+    assert_eq!(escaped.failed, 1);
+    assert!(outside_backup.storage_path.exists());
+    let outside_state: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT state FROM backup_records WHERE id=?1",
+            params![outside_backup.backup_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outside_state, "SUCCEEDED");
     std::fs::remove_dir_all(directory).unwrap();
+    std::fs::remove_dir_all(outside_directory).unwrap();
 }
 
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {

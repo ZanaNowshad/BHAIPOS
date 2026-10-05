@@ -1005,6 +1005,7 @@ fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
 struct BackupJobPayload {
     backup_type: String,
     app_version: String,
+    schedule_id: Option<Uuid>,
 }
 
 fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
@@ -1087,46 +1088,100 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                 error: format!("invalid backup job payload: {error}"),
             },
             Ok(payload) => {
-                let cancel_requested = state
-                    .store
-                    .lock()
-                    .map_err(|_| "database state poisoned".to_string())?
-                    .heartbeat_background_job(
-                        terminal,
-                        authority_user,
-                        OperationId::new(),
-                        lease.job_id,
-                        lease.lease_token,
-                        0,
-                        Some(1),
-                        1_800,
-                        Utc::now(),
-                    )
-                    .map_err(command_error)?
-                    .cancel_requested;
-                if cancel_requested {
-                    BackgroundJobFinishOutcome::Cancelled { result_json: None }
+                let scheduled = payload.backup_type.eq_ignore_ascii_case("SCHEDULED");
+                if scheduled && payload.schedule_id.is_none() {
+                    BackgroundJobFinishOutcome::RequiresReview {
+                        error: "scheduled backup job is missing schedule identity".into(),
+                    }
                 } else {
-                    let result = state
+                    let cancel_requested = state
                         .store
                         .lock()
                         .map_err(|_| "database state poisoned".to_string())?
-                        .create_verified_backup(StoreBackupCreateRequest {
+                        .heartbeat_background_job(
+                            terminal,
+                            authority_user,
+                            OperationId::new(),
+                            lease.job_id,
+                            lease.lease_token,
+                            0,
+                            Some(1),
+                            1_800,
+                            Utc::now(),
+                        )
+                        .map_err(command_error)?
+                        .cancel_requested;
+                    if cancel_requested {
+                        BackgroundJobFinishOutcome::Cancelled { result_json: None }
+                    } else {
+                        let completed_at = Utc::now();
+                        let mut store = state
+                            .store
+                            .lock()
+                            .map_err(|_| "database state poisoned".to_string())?;
+                        let result = store.create_verified_backup(StoreBackupCreateRequest {
                             context: terminal,
                             user_id: authority_user,
                             operation_id: OperationId(lease.job_id),
                             backup_type: payload.backup_type,
                             destination_directory: state.backup_directory.clone(),
                             app_version: payload.app_version,
-                            now: Utc::now(),
+                            now: completed_at,
                         });
-                    match result {
-                        Ok(result) => BackgroundJobFinishOutcome::Succeeded {
-                            result_json: serde_json::to_string(&result).map_err(command_error)?,
-                        },
-                        Err(error) => BackgroundJobFinishOutcome::RequiresReview {
-                            error: error.to_string(),
-                        },
+                        match result {
+                            Ok(result) if scheduled => {
+                                let schedule_id = payload.schedule_id.ok_or_else(|| {
+                                    "scheduled backup job is missing schedule identity".to_string()
+                                })?;
+                                let retention = store
+                                    .record_scheduled_backup_output(
+                                        terminal,
+                                        authority_user,
+                                        schedule_id,
+                                        lease.job_id,
+                                        result.backup_id,
+                                        completed_at,
+                                    )
+                                    .and_then(|()| {
+                                        store.prune_scheduled_backups(
+                                            terminal,
+                                            authority_user,
+                                            OperationId(lease.job_id),
+                                            schedule_id,
+                                            &state.backup_directory,
+                                            completed_at,
+                                        )
+                                    });
+                                match retention {
+                                    Ok(retention) if retention.failed == 0 => {
+                                        BackgroundJobFinishOutcome::Succeeded {
+                                            result_json: serde_json::json!({
+                                                "backup":result,
+                                                "retention":retention,
+                                            })
+                                            .to_string(),
+                                        }
+                                    }
+                                    Ok(retention) => BackgroundJobFinishOutcome::RequiresReview {
+                                        error: format!(
+                                            "backup completed but {} retention deletion(s) require review",
+                                            retention.failed
+                                        ),
+                                    },
+                                    Err(error) => BackgroundJobFinishOutcome::RequiresReview {
+                                        error: format!(
+                                            "backup completed but retention processing failed: {error}"
+                                        ),
+                                    },
+                                }
+                            }
+                            Ok(result) => BackgroundJobFinishOutcome::Succeeded {
+                                result_json: serde_json::to_string(&result).map_err(command_error)?,
+                            },
+                            Err(error) => BackgroundJobFinishOutcome::RequiresReview {
+                                error: error.to_string(),
+                            },
+                        }
                     }
                 }
             }
