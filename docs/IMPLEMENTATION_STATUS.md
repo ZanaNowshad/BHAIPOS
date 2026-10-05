@@ -11,9 +11,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All eighteen SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 160 application tables created.
-- 215 integrity/security triggers created.
+- All nineteen SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 162 application tables created.
+- 224 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -41,9 +41,12 @@ Status vocabulary:
 - Production migration reapplication, immutable completion/usage evidence and tenant guards pass.
 - Expense migration reapplication, exact-fils validation, state-transition evidence, post-submission financial immutability, payment amount binding and tenant/device guards pass.
 - Operational-alert migration reapplication, tenant/branch/device scope, legal lifecycle transitions, mandatory closure evidence and append-only history guards pass.
+- Background-job migration reapplication, tenant/branch/device/user scope, legal state transitions, append-only event evidence and payload-bound operation-result guards pass.
 
 **CI VERIFIED**
 
+- GitHub Actions runs `37240547597` and `37258354228` pass Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the durable background-job engine and expanded lost-response replay assertions.
+- Permissioned job enqueue/claim/heartbeat/progress/cancellation/retry/failure/recovery operations use payload-bound idempotency, opaque leases, bounded monotonic progress, retry backoff, immutable events and material-action audit evidence. Expired workers are recoverable without duplicating terminal effects.
 - GitHub Actions run `37238619386` passes Rust formatting, strict Clippy, 10 core tests, all 52 store invariant tests, desktop Rust compilation, desktop TypeScript checking and the production UI build for the evidence-driven operational-alert evaluator.
 - A permissioned, payload-bound evaluation operation atomically produces active deduplicated alerts from low-stock, lot-expiry, delayed-sync, offline-terminal, overdue-supplier-invoice, failed-backup and repeated-authentication-failure evidence. Replays return the original result; new evaluations report existing alerts without flooding. Calendar-date conditions use Bahrain local time while duration cutoffs remain UTC.
 - GitHub Actions run `37227313354` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the automatic operational-alert producer change.
@@ -98,10 +101,11 @@ Status vocabulary:
 - Rust invariant test suite and GitHub CI workflow;
 - Tauri bootstrap and Cashier/Admin React shell source.
 - typed Tauri command allow-list for local bootstrap/login, cash-session recovery, cart scan, checkout, print recovery, refund, cash movement/report and close;
+- durable background-job engine with payload-bound enqueue, replay-safe claims, opaque renewable leases, bounded progress, cancellation, retry backoff, terminal failure/review states and expired-worker recovery;
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; background jobs; feature flags; backups/restores; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; concrete job handlers and scheduler integrations for imports, backups, OCR, AI and sync; feature flags; backups/restores; diagnostics/update records.
 
 ## Runtime components still not implemented
 

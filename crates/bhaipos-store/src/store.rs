@@ -22,6 +22,8 @@ mod customer_ops;
 mod delivery_ops;
 #[path = "expense_ops.rs"]
 mod expense_ops;
+#[path = "job_ops.rs"]
+mod job_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
@@ -49,7 +51,8 @@ const MIGRATION_0016: &str =
     include_str!("../../../migrations/0016_delivery_courier_operations.sql");
 const MIGRATION_0017: &str = include_str!("../../../migrations/0017_attendance_operations.sql");
 const MIGRATION_0018: &str = include_str!("../../../migrations/0018_operational_alerts.sql");
-pub const LATEST_SCHEMA: &str = "0018_operational_alerts";
+const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_jobs.sql");
+pub const LATEST_SCHEMA: &str = "0019_background_jobs";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -288,6 +291,89 @@ pub struct FailedPrintJob {
     pub document_type: String,
     pub attempts: i64,
     pub last_error: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BackgroundJobEnqueueRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub job_type: String,
+    pub payload_json: String,
+    pub progress_total: Option<i64>,
+    pub cancellable: bool,
+    pub max_attempts: i64,
+    pub not_before: Option<DateTime<Utc>>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobResult {
+    pub job_id: Uuid,
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub cancel_requested: bool,
+    pub retry_after: Option<String>,
+    pub error: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobLease {
+    pub job_id: Uuid,
+    pub job_type: String,
+    pub payload_json: String,
+    pub lease_token: Uuid,
+    pub lease_expires_at: String,
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub cancel_requested: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobProgressResult {
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub cancel_requested: bool,
+    pub lease_expires_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobRecoveryResult {
+    pub requeued: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackgroundJobFinishOutcome {
+    Succeeded { result_json: String },
+    Failed { error: String, retryable: bool },
+    RequiresReview { error: String },
+    Cancelled { result_json: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundJobSummary {
+    pub job_id: Uuid,
+    pub job_type: String,
+    pub state: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub attempts: i64,
+    pub max_attempts: i64,
+    pub cancellable: bool,
+    pub cancel_requested: bool,
+    pub retry_after: Option<String>,
+    pub error: Option<String>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -785,6 +871,26 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0016)?;
         self.conn.execute_batch(MIGRATION_0017)?;
         self.conn.execute_batch(MIGRATION_0018)?;
+        for (column, ddl) in [
+            ("origin_device_id", "ALTER TABLE background_jobs ADD COLUMN origin_device_id TEXT REFERENCES devices(id)"),
+            ("operation_id", "ALTER TABLE background_jobs ADD COLUMN operation_id TEXT"),
+            ("request_sha256", "ALTER TABLE background_jobs ADD COLUMN request_sha256 TEXT"),
+            ("attempts", "ALTER TABLE background_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
+            ("max_attempts", "ALTER TABLE background_jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3"),
+            ("not_before", "ALTER TABLE background_jobs ADD COLUMN not_before TEXT"),
+            ("lease_token", "ALTER TABLE background_jobs ADD COLUMN lease_token TEXT"),
+            ("lease_owner_device_id", "ALTER TABLE background_jobs ADD COLUMN lease_owner_device_id TEXT REFERENCES devices(id)"),
+            ("lease_expires_at", "ALTER TABLE background_jobs ADD COLUMN lease_expires_at TEXT"),
+            ("cancel_requested_at", "ALTER TABLE background_jobs ADD COLUMN cancel_requested_at TEXT"),
+            ("cancel_requested_by_user_id", "ALTER TABLE background_jobs ADD COLUMN cancel_requested_by_user_id TEXT REFERENCES users(id)"),
+            ("cancel_reason", "ALTER TABLE background_jobs ADD COLUMN cancel_reason TEXT"),
+            ("retry_after", "ALTER TABLE background_jobs ADD COLUMN retry_after TEXT"),
+            ("started_at", "ALTER TABLE background_jobs ADD COLUMN started_at TEXT"),
+            ("completed_at", "ALTER TABLE background_jobs ADD COLUMN completed_at TEXT"),
+        ] {
+            Self::ensure_column(&self.conn, "background_jobs", column, ddl)?;
+        }
+        self.conn.execute_batch(MIGRATION_0019)?;
         Ok(())
     }
     fn ensure_column(
@@ -953,6 +1059,10 @@ impl Store {
             ("alert.create", "Create operational alerts"),
             ("alert.manage", "Assign and transition operational alerts"),
             ("alert.view", "View operational alerts"),
+            ("job.enqueue", "Enqueue background jobs"),
+            ("job.execute", "Execute background jobs"),
+            ("job.manage", "Cancel and recover background jobs"),
+            ("job.view", "View background jobs"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
