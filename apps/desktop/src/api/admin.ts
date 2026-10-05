@@ -30,9 +30,37 @@ export type RestoreResult = {
   completed_at: string;
 };
 
+export type BackupScheduleResult = {
+  schedule_id: string;
+  state: 'ACTIVE' | 'DISABLED' | 'REQUIRES_REVIEW';
+  interval_minutes: number;
+  retention_count: number;
+  next_run_at: string;
+  authorization_expires_at: string;
+  version: number;
+};
+
 export const adminApi = {
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
+  configureBackupSchedule: (
+    operationId: string,
+    intervalMinutes: number,
+    retentionCount: number,
+    enabled: boolean,
+    firstRunAt: string,
+    authorizationValidDays: number,
+  ) =>
+    invoke<BackupScheduleResult>('configure_backup_schedule', {
+      request: {
+        operationId,
+        intervalMinutes,
+        retentionCount,
+        enabled,
+        firstRunAt,
+        authorizationValidDays,
+      },
+    }),
   previewRestore: (backupId: string) =>
     invoke<RestorePreview>('preview_verified_restore', { request: { backupId } }),
   restoreBackup: (operationId: string, backupId: string, expectedSha256: string) =>

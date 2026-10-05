@@ -11,9 +11,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 164 application tables created.
-- 234 integrity/security triggers created.
+- All twenty-one SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 167 application tables created.
+- 243 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -43,6 +43,7 @@ Status vocabulary:
 - Operational-alert migration reapplication, tenant/branch/device scope, legal lifecycle transitions, mandatory closure evidence and append-only history guards pass.
 - Background-job migration reapplication, tenant/branch/device/user scope, legal state transitions, append-only event evidence and payload-bound operation-result guards pass.
 - Backup/restore migration reapplication, immutable operation/event evidence, tenant/device/user guards and historical record identity guards pass.
+- Backup-schedule migration reapplication, payload-bound configuration/ticks, bounded authorization expiry, atomic due-job enqueue and immutable schedule evidence guards pass.
 
 **CI VERIFIED**
 
@@ -108,10 +109,11 @@ Status vocabulary:
 - typed Tauri command allow-list for local bootstrap/login, cash-session recovery, cart scan, checkout, print recovery, refund, cash movement/report and close;
 - durable background-job engine with payload-bound enqueue, replay-safe claims, opaque renewable leases, bounded progress, cancellation, retry backoff, terminal failure/review states and expired-worker recovery;
 - verified WAL-aware manual backup, integrity/hash validation, owner-only compatibility preview and restore, pre-restore safety backup, staged atomic replacement, replay-safe results and append-only recovery evidence;
+- bounded owner-authorized backup schedules with exact-once due enqueue, fail-closed permission/expiry review, trusted logged-out worker claims and a typed authority-free desktop configuration contract;
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; concrete job handlers and scheduler integrations for imports, scheduled backups, OCR, AI and sync; feature flags; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; concrete job handlers for imports, OCR, AI and sync; scheduled-backup retention pruning; feature flags; diagnostics/update records.
 
 ## Runtime components still not implemented
 
@@ -128,7 +130,7 @@ Product/category scheduling; branch/channel pricing APIs; price/cost history com
 - OCR engine/provider integration and review UI.
 - AI provider adapters, tool registry, risk classifier, confirmation UX, compensating/undo executor and knowledge retrieval.
 - Windows Credential Manager integration for secrets.
-- Backup scheduling/retention, administration UI, encryption/key custody and Windows crash-interruption exercise. Narrow trusted commands and durable manual-backup dispatch are implemented.
+- Scheduled-backup retention pruning, administration UI, encryption/key custody and Windows crash-interruption exercise. Narrow trusted commands, durable manual-backup dispatch and bounded unattended scheduling are implemented.
 - Import/migration wizard and spreadsheet injection sanitizer.
 - Reports/analytics query layer and export generators.
 - Signed updater and rollback behavior.

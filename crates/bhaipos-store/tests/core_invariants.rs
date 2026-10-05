@@ -466,6 +466,20 @@ fn scheduled_backups_enqueue_once_and_expired_authority_requires_review() {
         )
         .unwrap();
     assert_eq!(queued, (1, "BACKUP_CREATE".into()));
+    let scheduled_claim_operation = OperationId::new();
+    let scheduled_lease = f
+        .store
+        .claim_next_scheduled_backup_job(context, scheduled_claim_operation, 120, now)
+        .unwrap()
+        .unwrap();
+    assert_eq!(scheduled_lease.user_id, f.user);
+    assert_eq!(scheduled_lease.job_type, "BACKUP_CREATE");
+    assert_eq!(
+        Some(scheduled_lease),
+        f.store
+            .claim_next_scheduled_backup_job(context, scheduled_claim_operation, 120, now)
+            .unwrap()
+    );
     assert_eq!(
         f.store
             .enqueue_due_backup_jobs(

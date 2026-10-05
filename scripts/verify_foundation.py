@@ -22,6 +22,7 @@ UPGRADE_0017=ROOT/'migrations/0017_attendance_operations.sql'
 UPGRADE_0018=ROOT/'migrations/0018_operational_alerts.sql'
 UPGRADE_0019=ROOT/'migrations/0019_background_jobs.sql'
 UPGRADE_0020=ROOT/'migrations/0020_backup_restore.sql'
+UPGRADE_0021=ROOT/'migrations/0021_backup_scheduling.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -92,6 +93,7 @@ def apply_schema(con, include_payload_binding=True):
             if col not in {r[1] for r in con.execute(f'PRAGMA table_info({table})')}:
                 con.execute(ddl)
         con.executescript(UPGRADE_0020.read_text())
+        con.executescript(UPGRADE_0021.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -345,6 +347,7 @@ required_commands={
     'find_refundable_sale','quote_refund','list_failed_print_jobs',
     'list_operational_alerts','transition_operational_alert',
     'create_verified_backup','preview_verified_restore','restore_verified_backup',
+    'configure_backup_schedule',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -353,11 +356,11 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0020_backup_restore"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0021_backup_scheduling"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
-for boundary in ['fn background_worker_cycle','BACKUP_CREATE','recover_expired_background_jobs','claim_next_background_job','create_verified_backup','finish_background_job']:
+for boundary in ['fn background_worker_cycle','BACKUP_CREATE','recover_expired_background_jobs','claim_next_background_job','claim_next_scheduled_backup_job','enqueue_due_backup_jobs','create_verified_backup','finish_background_job']:
     assert boundary in desktop_bridge, boundary
 for request_name,body in re.findall(r'struct\s+(\w*Request)\s*\{([^}]*)\}',desktop_bridge,re.S):
     forbidden=re.findall(r'\b(?:tenant_id|branch_id|device_id|user_id|actor_user_id)\s*:',body)
@@ -417,13 +420,17 @@ for trigger in ['guard_background_job_insert','guard_background_job_update','gua
 backup_ops=(ROOT/'crates/bhaipos-store/src/backup_ops.rs').read_text()
 for symbol in ['create_verified_backup','preview_restore','restore_verified_backup','integrity_check','foreign_key_check','PRE_RESTORE']:
     assert symbol in backup_ops, symbol
+for symbol in ['configure_backup_schedule','enqueue_due_backup_jobs','backup_schedule_operation_results','AUTHORIZATION_REVIEW_REQUIRED']:
+    assert symbol in backup_ops, symbol
 for trigger in ['immutable_backup_operation_results_update','immutable_backup_events_update','immutable_backup_records_identity','guard_backup_record_scope','guard_backup_event_scope']:
+    assert trigger in triggers, trigger
+for trigger in ['immutable_backup_schedule_events_update','immutable_backup_schedule_operation_results_update','immutable_backup_schedule_identity','guard_backup_schedule_scope_insert','guard_backup_schedule_event_scope']:
     assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
 admin_api=(ROOT/'apps/desktop/src/api/admin.ts').read_text()
-for command in ['create_verified_backup','preview_verified_restore','restore_verified_backup']:
+for command in ['create_verified_backup','configure_backup_schedule','preview_verified_restore','restore_verified_backup']:
     assert f"'{command}'" in admin_api, command
 for forbidden in ['destinationDirectory','safetyBackupDirectory','storagePath']:
     assert forbidden not in admin_api, forbidden
@@ -452,5 +459,6 @@ result={
     'operational_alert_state_and_evidence_guards': 'ok',
     'background_job_lifecycle_and_evidence_guards': 'ok',
     'backup_restore_integrity_and_evidence_guards': 'ok',
+    'scheduled_backup_idempotency_and_authorization_guards': 'ok',
 }
 print(json.dumps(result,indent=2,sort_keys=True))
