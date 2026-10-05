@@ -248,6 +248,20 @@ fn backup_restore_is_wal_safe_verified_owner_only_and_replay_safe() {
             params![f.product.to_string()],
         )
         .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "DELETE FROM user_roles WHERE user_id=?1 AND role_id=?2",
+            params![f.user.to_string(), owner_role.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.store.preview_restore(context, f.user, backup.backup_id),
+        Err(StoreError::Authorization(message)) if message.contains("owner")
+    ));
+    f.store
+        .assign_role(f.user, owner_role, Some(f.branch))
+        .unwrap();
     let preview = f
         .store
         .preview_restore(context, f.user, backup.backup_id)
