@@ -10,14 +10,14 @@ impl Store {
         if !self.user_has_permission(context, user, "diagnostics.view")? {
             return Err(StoreError::Authorization("diagnostics.view"));
         }
-        let database_integrity: String =
+        let database_integrity: String = self
+            .conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        let foreign_key_violations: i64 =
             self.conn
-                .query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-        let foreign_key_violations: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM pragma_foreign_key_check",
-            [],
-            |row| row.get(0),
-        )?;
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })?;
         let (device_status, device_app_version, last_heartbeat_at): (
             String,
             Option<String>,
