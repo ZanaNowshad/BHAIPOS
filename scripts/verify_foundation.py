@@ -357,6 +357,8 @@ assert re.search(
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
+for boundary in ['fn background_worker_cycle','BACKUP_CREATE','recover_expired_background_jobs','claim_next_background_job','create_verified_backup','finish_background_job']:
+    assert boundary in desktop_bridge, boundary
 for request_name,body in re.findall(r'struct\s+(\w*Request)\s*\{([^}]*)\}',desktop_bridge,re.S):
     forbidden=re.findall(r'\b(?:tenant_id|branch_id|device_id|user_id|actor_user_id)\s*:',body)
     assert not forbidden, (request_name,forbidden)

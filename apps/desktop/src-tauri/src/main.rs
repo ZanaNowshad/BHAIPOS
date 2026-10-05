@@ -8,7 +8,8 @@ use bhaipos_core::{
     QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
-    BackupCreateRequest as StoreBackupCreateRequest, BackupResult, CartSnapshot, CashMovementKind,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
+    BackupCreateRequest as StoreBackupCreateRequest, CartSnapshot, CashMovementKind,
     CashMovementRequest as StoreCashMovementRequest, CashMovementResult, CashSessionReport,
     CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult, FailedPrintJob,
@@ -789,19 +790,26 @@ fn transition_operational_alert(
 fn create_verified_backup(
     state: State<'_, AppState>,
     request: CreateBackupRequest,
-) -> Result<BackupResult, String> {
+) -> Result<BackgroundJobResult, String> {
     let session = require_session(&state)?;
     state
         .store
         .lock()
         .map_err(|_| "database state poisoned".to_string())?
-        .create_verified_backup(StoreBackupCreateRequest {
+        .enqueue_background_job(BackgroundJobEnqueueRequest {
             context: session.terminal,
             user_id: session.user_id,
             operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
-            backup_type: "MANUAL".into(),
-            destination_directory: state.backup_directory.clone(),
-            app_version: env!("CARGO_PKG_VERSION").into(),
+            job_type: "BACKUP_CREATE".into(),
+            payload_json: serde_json::json!({
+                "backup_type": "MANUAL",
+                "app_version": env!("CARGO_PKG_VERSION"),
+            })
+            .to_string(),
+            progress_total: Some(1),
+            cancellable: true,
+            max_attempts: 3,
+            not_before: None,
             now: Utc::now(),
         })
         .map_err(command_error)
@@ -952,6 +960,118 @@ fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
         .map_err(command_error)
 }
 
+#[derive(Deserialize)]
+struct BackupJobPayload {
+    backup_type: String,
+    app_version: String,
+}
+
+fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
+    let state = handle.state::<AppState>();
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| "session state poisoned".to_string())?
+        .as_ref()
+        .copied();
+    let Some(session) = session else { return Ok(()) };
+    let now = Utc::now();
+    let lease = {
+        let mut store = state
+            .store
+            .lock()
+            .map_err(|_| "database state poisoned".to_string())?;
+        store
+            .recover_expired_background_jobs(
+                session.terminal,
+                session.user_id,
+                OperationId::new(),
+                now,
+            )
+            .map_err(command_error)?;
+        store
+            .claim_next_background_job(
+            session.terminal,
+            session.user_id,
+            OperationId::new(),
+            1_800,
+            now,
+        )
+            .map_err(command_error)?
+    };
+    let Some(lease) = lease else { return Ok(()) };
+    let outcome = if lease.job_type == "BACKUP_CREATE" {
+        match serde_json::from_str::<BackupJobPayload>(&lease.payload_json) {
+            Err(error) => BackgroundJobFinishOutcome::RequiresReview {
+                error: format!("invalid backup job payload: {error}"),
+            },
+            Ok(payload) => {
+                let cancel_requested = state
+                    .store
+                    .lock()
+                    .map_err(|_| "database state poisoned".to_string())?
+                    .heartbeat_background_job(
+                        session.terminal,
+                        session.user_id,
+                        OperationId::new(),
+                        lease.job_id,
+                        lease.lease_token,
+                        1_800,
+                        Some(0),
+                        Some(1),
+                        Utc::now(),
+                    )
+                    .map_err(command_error)?
+                    .cancel_requested;
+                if cancel_requested {
+                    BackgroundJobFinishOutcome::Cancelled { result_json: None }
+                } else {
+                    let result = state
+                .store
+                .lock()
+                .map_err(|_| "database state poisoned".to_string())?
+                .create_verified_backup(StoreBackupCreateRequest {
+                    context: session.terminal,
+                    user_id: session.user_id,
+                    operation_id: OperationId(lease.job_id),
+                    backup_type: payload.backup_type,
+                    destination_directory: state.backup_directory.clone(),
+                    app_version: payload.app_version,
+                    now: Utc::now(),
+                });
+                    match result {
+                        Ok(result) => BackgroundJobFinishOutcome::Succeeded {
+                            result_json: serde_json::to_string(&result).map_err(command_error)?,
+                        },
+                        Err(error) => BackgroundJobFinishOutcome::RequiresReview {
+                            error: error.to_string(),
+                        },
+                    }
+                }
+            }
+        }
+    } else {
+        BackgroundJobFinishOutcome::RequiresReview {
+            error: format!("no deterministic handler for job type {}", lease.job_type),
+        }
+    };
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .finish_background_job(
+            session.terminal,
+            session.user_id,
+            OperationId::new(),
+            lease.job_id,
+            lease.lease_token,
+            outcome,
+            Utc::now(),
+        )
+        .map_err(command_error)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -973,6 +1093,13 @@ fn main() {
             std::thread::spawn(move || loop {
                 if let Err(error) = print_worker_cycle(&handle) {
                     eprintln!("BHAIPOS print worker: {error}");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            });
+            let background_handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                if let Err(error) = background_worker_cycle(&background_handle) {
+                    eprintln!("BHAIPOS background worker: {error}");
                 }
                 std::thread::sleep(std::time::Duration::from_secs(2));
             });

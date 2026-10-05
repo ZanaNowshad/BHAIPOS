@@ -1,12 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export type BackupResult = {
-  backup_id: string;
-  storage_path: string;
-  sha256: string;
-  byte_size: number;
-  schema_version: string;
-  integrity_state: string;
+export type BackgroundJobResult = {
+  job_id: string;
+  state: string;
+  progress_current: number;
+  progress_total: number | null;
+  attempts: number;
+  max_attempts: number;
+  cancel_requested: boolean;
+  retry_after: string | null;
+  error: string | null;
+  updated_at: string;
 };
 
 export type RestorePreview = {
@@ -28,7 +32,7 @@ export type RestoreResult = {
 
 export const adminApi = {
   createBackup: (operationId: string) =>
-    invoke<BackupResult>('create_verified_backup', { request: { operationId } }),
+    invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   previewRestore: (backupId: string) =>
     invoke<RestorePreview>('preview_verified_restore', { request: { backupId } }),
   restoreBackup: (operationId: string, backupId: string, expectedSha256: string) =>
