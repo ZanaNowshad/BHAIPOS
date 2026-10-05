@@ -4066,12 +4066,13 @@ fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
             .claim_next_background_job(context, f.user, claim_operation, 120, now)
             .unwrap()
     );
+    let heartbeat_operation = OperationId::new();
     let progress = f
         .store
         .heartbeat_background_job(
             context,
             f.user,
-            OperationId::new(),
+            heartbeat_operation,
             lease.job_id,
             lease.lease_token,
             4,
@@ -4082,6 +4083,22 @@ fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
         .unwrap();
     assert_eq!(progress.progress_current, 4);
     assert!(!progress.cancel_requested);
+    assert_eq!(
+        progress,
+        f.store
+            .heartbeat_background_job(
+                context,
+                f.user,
+                heartbeat_operation,
+                lease.job_id,
+                lease.lease_token,
+                4,
+                Some(10),
+                120,
+                now + chrono::Duration::seconds(31),
+            )
+            .unwrap()
+    );
     let cancel_operation = OperationId::new();
     let cancel = f
         .store
@@ -4109,21 +4126,37 @@ fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
             )
             .unwrap()
     );
+    let cancelled_finish_operation = OperationId::new();
+    let cancelled_outcome = BackgroundJobFinishOutcome::Cancelled {
+        result_json: Some(serde_json::json!({"rows_applied":4}).to_string()),
+    };
     let acknowledged = f
         .store
         .finish_background_job(
             context,
             f.user,
-            OperationId::new(),
+            cancelled_finish_operation,
             lease.job_id,
             lease.lease_token,
-            BackgroundJobFinishOutcome::Cancelled {
-                result_json: Some(serde_json::json!({"rows_applied":4}).to_string()),
-            },
+            cancelled_outcome.clone(),
             now + chrono::Duration::seconds(40),
         )
         .unwrap();
     assert_eq!(acknowledged.state, "CANCELLED");
+    assert_eq!(
+        acknowledged,
+        f.store
+            .finish_background_job(
+                context,
+                f.user,
+                cancelled_finish_operation,
+                lease.job_id,
+                lease.lease_token,
+                cancelled_outcome,
+                now + chrono::Duration::seconds(50),
+            )
+            .unwrap()
+    );
     assert!(matches!(
         f.store.finish_background_job(
             context,
@@ -4166,30 +4199,58 @@ fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
         .unwrap()
         .unwrap();
     assert_eq!(retry_lease.job_id, retry_job.job_id);
+    let retry_finish_operation = OperationId::new();
+    let retry_outcome = BackgroundJobFinishOutcome::Failed {
+        error: "temporary I/O failure".into(),
+        retryable: true,
+    };
     let retry = f
         .store
         .finish_background_job(
             context,
             f.user,
-            OperationId::new(),
+            retry_finish_operation,
             retry_lease.job_id,
             retry_lease.lease_token,
-            BackgroundJobFinishOutcome::Failed {
-                error: "temporary I/O failure".into(),
-                retryable: true,
-            },
+            retry_outcome.clone(),
             now + chrono::Duration::seconds(61),
         )
         .unwrap();
     assert_eq!(retry.state, "QUEUED");
+    assert_eq!(
+        retry,
+        f.store
+            .finish_background_job(
+                context,
+                f.user,
+                retry_finish_operation,
+                retry_lease.job_id,
+                retry_lease.lease_token,
+                retry_outcome,
+                now + chrono::Duration::seconds(62),
+            )
+            .unwrap()
+    );
+    let empty_claim_operation = OperationId::new();
     assert!(f
         .store
         .claim_next_background_job(
             context,
             f.user,
-            OperationId::new(),
+            empty_claim_operation,
             60,
             now + chrono::Duration::seconds(62),
+        )
+        .unwrap()
+        .is_none());
+    assert!(f
+        .store
+        .claim_next_background_job(
+            context,
+            f.user,
+            empty_claim_operation,
+            60,
+            now + chrono::Duration::seconds(64),
         )
         .unwrap()
         .is_none());
@@ -4205,18 +4266,30 @@ fn background_jobs_are_payload_bound_leased_cancellable_and_recoverable() {
         .unwrap()
         .unwrap();
     assert_eq!(final_lease.attempt, 2);
+    let recovery_operation = OperationId::new();
     let recovery = f
         .store
         .recover_expired_background_jobs(
             context,
             f.user,
-            OperationId::new(),
+            recovery_operation,
             now + chrono::Duration::seconds(125),
         )
         .unwrap();
     assert_eq!(recovery.requeued, 0);
     assert_eq!(recovery.failed, 1);
     assert_eq!(recovery.cancelled, 0);
+    assert_eq!(
+        recovery,
+        f.store
+            .recover_expired_background_jobs(
+                context,
+                f.user,
+                recovery_operation,
+                now + chrono::Duration::minutes(10),
+            )
+            .unwrap()
+    );
     let jobs = f.store.background_jobs(context, f.user, 20).unwrap();
     assert_eq!(
         jobs.iter()
