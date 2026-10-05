@@ -12,16 +12,17 @@ use bhaipos_store::{
     BackupCreateRequest as StoreBackupCreateRequest, CartSnapshot, CashMovementKind,
     CashMovementRequest as StoreCashMovementRequest, CashMovementResult, CashSessionReport,
     CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
-    CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult, FailedPrintJob,
-    HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult,
-    LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary, PaymentInput,
-    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
-    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
+    CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
+    FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
+    LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
+    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
+    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
+    RestoreResult, Store,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{Manager, State};
 use uuid::Uuid;
 
@@ -974,7 +975,9 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|_| "session state poisoned".to_string())?
         .as_ref()
         .copied();
-    let Some(session) = session else { return Ok(()) };
+    let Some(session) = session else {
+        return Ok(());
+    };
     let now = Utc::now();
     let lease = {
         let mut store = state
@@ -991,12 +994,12 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
             .map_err(command_error)?;
         store
             .claim_next_background_job(
-            session.terminal,
-            session.user_id,
-            OperationId::new(),
-            1_800,
-            now,
-        )
+                session.terminal,
+                session.user_id,
+                OperationId::new(),
+                1_800,
+                now,
+            )
             .map_err(command_error)?
     };
     let Some(lease) = lease else { return Ok(()) };
@@ -1016,9 +1019,9 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                         OperationId::new(),
                         lease.job_id,
                         lease.lease_token,
-                        1_800,
-                        Some(0),
+                        0,
                         Some(1),
+                        1_800,
                         Utc::now(),
                     )
                     .map_err(command_error)?
@@ -1027,18 +1030,18 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                     BackgroundJobFinishOutcome::Cancelled { result_json: None }
                 } else {
                     let result = state
-                .store
-                .lock()
-                .map_err(|_| "database state poisoned".to_string())?
-                .create_verified_backup(StoreBackupCreateRequest {
-                    context: session.terminal,
-                    user_id: session.user_id,
-                    operation_id: OperationId(lease.job_id),
-                    backup_type: payload.backup_type,
-                    destination_directory: state.backup_directory.clone(),
-                    app_version: payload.app_version,
-                    now: Utc::now(),
-                });
+                        .store
+                        .lock()
+                        .map_err(|_| "database state poisoned".to_string())?
+                        .create_verified_backup(StoreBackupCreateRequest {
+                            context: session.terminal,
+                            user_id: session.user_id,
+                            operation_id: OperationId(lease.job_id),
+                            backup_type: payload.backup_type,
+                            destination_directory: state.backup_directory.clone(),
+                            app_version: payload.app_version,
+                            now: Utc::now(),
+                        });
                     match result {
                         Ok(result) => BackgroundJobFinishOutcome::Succeeded {
                             result_json: serde_json::to_string(&result).map_err(command_error)?,
