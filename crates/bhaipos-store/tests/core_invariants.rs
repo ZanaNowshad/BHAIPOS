@@ -4,9 +4,10 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, CashMovementKind, CashMovementRequest,
-    CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest, NewProduct, PaymentInput,
-    RefundLineInput, RefundRequest, Store, StoreError, SyncDeliveryOutcome,
+    BackupCreateRequest, BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome,
+    CashMovementKind, CashMovementRequest, CheckoutRequest, CloseCashSessionRequest,
+    LocalBootstrapRequest, NewProduct, PaymentInput, RefundLineInput, RefundRequest,
+    RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -93,6 +94,8 @@ fn fixture() -> Fixture {
         ("job.execute", "Execute background jobs"),
         ("job.manage", "Cancel and recover background jobs"),
         ("job.view", "View background jobs"),
+        ("backup.create", "Create and verify backups"),
+        ("backup.restore", "Restore verified backups"),
         ("cash.session.open", "Open cash session"),
         ("cash.session.close", "Close cash session"),
         ("cash.movement.paid_in", "Paid in"),
@@ -200,6 +203,160 @@ fn fixture() -> Fixture {
         product,
         cash_session,
     }
+}
+
+#[test]
+fn backup_restore_is_wal_safe_verified_owner_only_and_replay_safe() {
+    let mut f = fixture();
+    let now = t("2026-10-05T03:30:00Z");
+    let owner_role = Uuid::new_v4();
+    f.store.create_role(owner_role, f.tenant, "owner").unwrap();
+    f.store
+        .grant_permission(owner_role, "backup.restore")
+        .unwrap();
+    f.store
+        .assign_role(f.user, owner_role, Some(f.branch))
+        .unwrap();
+    let directory = std::env::temp_dir().join(format!("bhaipos-backup-test-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let create_operation = OperationId::new();
+    let request = BackupCreateRequest {
+        context,
+        user_id: f.user,
+        operation_id: create_operation,
+        backup_type: "MANUAL".into(),
+        destination_directory: directory.clone(),
+        app_version: "0.1.0".into(),
+        now,
+    };
+    let backup = f.store.create_verified_backup(request.clone()).unwrap();
+    assert_eq!(backup, f.store.create_verified_backup(request).unwrap());
+    assert_eq!(backup.integrity_state, "VERIFIED");
+    assert!(backup.byte_size > 0);
+    assert!(backup.storage_path.exists());
+
+    f.store
+        .connection()
+        .execute(
+            "UPDATE products SET name='Changed after backup' WHERE id=?1",
+            params![f.product.to_string()],
+        )
+        .unwrap();
+    let preview = f
+        .store
+        .preview_restore(context, f.user, backup.backup_id)
+        .unwrap();
+    assert!(preview.compatible);
+    assert_eq!(preview.sha256, backup.sha256);
+
+    let restore_operation = OperationId::new();
+    let restore_request = RestoreBackupRequest {
+        context,
+        user_id: f.user,
+        operation_id: restore_operation,
+        backup_id: backup.backup_id,
+        expected_sha256: preview.sha256.clone(),
+        safety_backup_directory: directory.clone(),
+        app_version: "0.1.0".into(),
+        now: now + chrono::Duration::minutes(1),
+    };
+    let restored = f.store.restore_verified_backup(restore_request.clone()).unwrap();
+    assert_eq!(
+        restored,
+        f.store.restore_verified_backup(restore_request).unwrap()
+    );
+    assert_ne!(restored.pre_restore_backup_id, backup.backup_id);
+    let product_name: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT name FROM products WHERE id=?1",
+            params![f.product.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(product_name, "Milk 1L");
+    let evidence: i64 = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM restore_runs WHERE id=?1 AND state='SUCCEEDED' AND pre_restore_backup_id=?2",
+            params![restored.restore_id.to_string(), restored.pre_restore_backup_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(evidence, 1);
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn corrupted_backup_is_rejected_before_restore_mutates_business_data() {
+    let mut f = fixture();
+    let now = t("2026-10-05T04:00:00Z");
+    let owner_role = Uuid::new_v4();
+    f.store.create_role(owner_role, f.tenant, "owner").unwrap();
+    f.store
+        .grant_permission(owner_role, "backup.restore")
+        .unwrap();
+    f.store
+        .assign_role(f.user, owner_role, Some(f.branch))
+        .unwrap();
+    let directory = std::env::temp_dir().join(format!("bhaipos-backup-test-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let backup = f
+        .store
+        .create_verified_backup(BackupCreateRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId::new(),
+            backup_type: "MANUAL".into(),
+            destination_directory: directory.clone(),
+            app_version: "0.1.0".into(),
+            now,
+        })
+        .unwrap();
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&backup.storage_path)
+        .unwrap()
+        .write_all(b"tamper")
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE products SET name='Must survive refused restore' WHERE id=?1",
+            params![f.product.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.store.preview_restore(context, f.user, backup.backup_id),
+        Err(StoreError::Conflict(message)) if message.contains("hash")
+    ));
+    let name: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT name FROM products WHERE id=?1",
+            params![f.product.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(name, "Must survive refused restore");
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {
