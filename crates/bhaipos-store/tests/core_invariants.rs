@@ -515,6 +515,163 @@ fn scheduled_backups_enqueue_once_and_expired_authority_requires_review() {
     assert_eq!(state, "REQUIRES_REVIEW");
 }
 
+#[test]
+fn scheduled_backup_retention_is_replay_safe_and_preserves_restore_evidence() {
+    let mut f = fixture();
+    let now = t("2026-10-05T08:00:00Z");
+    let owner_role = Uuid::new_v4();
+    f.store.create_role(owner_role, f.tenant, "owner").unwrap();
+    for permission in [
+        "backup.schedule",
+        "backup.create",
+        "backup.retention",
+        "job.enqueue",
+    ] {
+        f.store.grant_permission(owner_role, permission).unwrap();
+    }
+    f.store
+        .assign_role(f.user, owner_role, Some(f.branch))
+        .unwrap();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let schedule = f
+        .store
+        .configure_backup_schedule(BackupScheduleRequest {
+            context,
+            user_id: f.user,
+            operation_id: OperationId::new(),
+            interval_minutes: 60,
+            retention_count: 2,
+            enabled: true,
+            first_run_at: now,
+            authorization_valid_days: 30,
+            now,
+        })
+        .unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("bhaipos-retention-test-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut backups = Vec::new();
+    for offset in 0..4 {
+        let created_at = now + chrono::Duration::minutes(offset);
+        let job = f
+            .store
+            .enqueue_background_job(BackgroundJobEnqueueRequest {
+                context,
+                user_id: f.user,
+                operation_id: OperationId::new(),
+                job_type: "BACKUP_CREATE".into(),
+                payload_json: serde_json::json!({
+                    "backup_type":"SCHEDULED",
+                    "app_version":"0.1.0",
+                    "schedule_id":schedule.schedule_id,
+                    "retention_count":2,
+                })
+                .to_string(),
+                progress_total: Some(1),
+                cancellable: true,
+                max_attempts: 3,
+                not_before: None,
+                now: created_at,
+            })
+            .unwrap();
+        let backup = f
+            .store
+            .create_verified_backup(BackupCreateRequest {
+                context,
+                user_id: f.user,
+                operation_id: OperationId(job.job_id),
+                backup_type: "SCHEDULED".into(),
+                destination_directory: directory.clone(),
+                app_version: "0.1.0".into(),
+                now: created_at,
+            })
+            .unwrap();
+        f.store
+            .record_scheduled_backup_output(
+                context,
+                f.user,
+                schedule.schedule_id,
+                job.job_id,
+                backup.backup_id,
+                created_at,
+            )
+            .unwrap();
+        backups.push(backup);
+    }
+    f.store
+        .connection()
+        .execute(
+            "INSERT INTO restore_runs(id,tenant_id,backup_id,state,compatibility_json,authorized_by_user_id,started_at,completed_at,result_json,branch_id,origin_device_id,operation_id) VALUES(?1,?2,?3,'SUCCEEDED','{}',?4,?5,?5,'{}',?6,?7,?8)",
+            params![Uuid::new_v4().to_string(),f.tenant.to_string(),backups[0].backup_id.to_string(),f.user.to_string(),now.to_rfc3339(),f.branch.to_string(),f.device.to_string(),OperationId::new().to_string()],
+        )
+        .unwrap();
+    let prune_operation = OperationId::new();
+    let result = f
+        .store
+        .prune_scheduled_backups(
+            context,
+            f.user,
+            prune_operation,
+            schedule.schedule_id,
+            &directory,
+            now + chrono::Duration::hours(1),
+        )
+        .unwrap();
+    assert_eq!(result.retained, 2);
+    assert_eq!(result.protected, 1);
+    assert_eq!(result.pruned, 1);
+    assert_eq!(result.failed, 0);
+    assert_eq!(
+        result,
+        f.store
+            .prune_scheduled_backups(
+                context,
+                f.user,
+                prune_operation,
+                schedule.schedule_id,
+                &directory,
+                now + chrono::Duration::hours(2),
+            )
+            .unwrap()
+    );
+    assert!(backups[0].storage_path.exists());
+    assert!(!backups[1].storage_path.exists());
+    assert!(backups[2].storage_path.exists());
+    assert!(backups[3].storage_path.exists());
+    let states: Vec<(String, String)> = {
+        let mut statement = f
+            .store
+            .connection()
+            .prepare(
+                "SELECT id,state FROM backup_records WHERE id IN (?1,?2,?3,?4) ORDER BY created_at,id",
+            )
+            .unwrap();
+        statement
+            .query_map(
+                params![
+                    backups[0].backup_id.to_string(),
+                    backups[1].backup_id.to_string(),
+                    backups[2].backup_id.to_string(),
+                    backups[3].backup_id.to_string()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        states.iter().filter(|(_, state)| state == "PRUNED").count(),
+        1
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {
     let c = CartId::new();
     f.store
