@@ -47,6 +47,8 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `37308423966` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for bounded scheduled backups.
+- Recurring backup configuration and due evaluation are payload-bound and device-scoped; due enqueue/checkpoint movement is atomic; expired, suspended or permission-revoked authority fails closed to review; logged-out claims revalidate the active schedule and its authorizing user before execution.
 - GitHub Actions run `37261516269` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the trusted backup administration bridge and durable backup worker dispatch.
 - Manual backup commands enqueue durable jobs without accepting renderer-provided authority or filesystem paths. The trusted worker recovers expired jobs, honors cancellation, reuses the job identity for replay-safe backup creation and routes unsupported/semantic failures to review.
 - GitHub Actions run `37260286733` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for verified WAL-aware backup and restore.
