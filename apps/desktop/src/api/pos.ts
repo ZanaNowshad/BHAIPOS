@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 export type Health = { ready: boolean; database: string; schema: string; initialized: boolean; authenticated: boolean };
 export type IdResponse = { id: string };
-export type LoginResponse = { displayName: string; cashSessionId: string | null; canViewAlerts:boolean; canManageAlerts:boolean };
+export type LoginResponse = { displayName: string; cashSessionId: string | null; canViewAlerts:boolean; canManageAlerts:boolean; canViewDiagnostics:boolean };
 export type CartLine = {
   id: string; product_id: string; name: string; sku: string; barcode: string | null;
   quantity: number; unit_price: number; net: number; tax: number; gross: number;

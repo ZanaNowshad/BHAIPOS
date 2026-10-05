@@ -23,6 +23,8 @@ mod backup_ops;
 mod customer_ops;
 #[path = "delivery_ops.rs"]
 mod delivery_ops;
+#[path = "diagnostics_ops.rs"]
+mod diagnostics_ops;
 #[path = "expense_ops.rs"]
 mod expense_ops;
 #[path = "job_ops.rs"]
@@ -58,7 +60,8 @@ const MIGRATION_0019: &str = include_str!("../../../migrations/0019_background_j
 const MIGRATION_0020: &str = include_str!("../../../migrations/0020_backup_restore.sql");
 const MIGRATION_0021: &str = include_str!("../../../migrations/0021_backup_scheduling.sql");
 const MIGRATION_0022: &str = include_str!("../../../migrations/0022_backup_retention.sql");
-pub const LATEST_SCHEMA: &str = "0022_backup_retention";
+const MIGRATION_0023: &str = include_str!("../../../migrations/0023_diagnostics.sql");
+pub const LATEST_SCHEMA: &str = "0023_diagnostics";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -406,6 +409,46 @@ pub struct BackupRetentionResult {
     pub protected: usize,
     pub retained: usize,
     pub failed: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticBackupSummary {
+    pub backup_id: Uuid,
+    pub backup_type: String,
+    pub state: String,
+    pub integrity_state: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticBackupScheduleSummary {
+    pub state: String,
+    pub next_run_at: String,
+    pub authorization_expires_at: String,
+    pub retention_count: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalDiagnostics {
+    pub tenant_id: TenantId,
+    pub branch_id: BranchId,
+    pub device_id: DeviceId,
+    pub register_id: RegisterId,
+    pub schema_version: String,
+    pub database_integrity: String,
+    pub foreign_key_violations: i64,
+    pub device_status: String,
+    pub device_app_version: Option<String>,
+    pub last_heartbeat_at: Option<String>,
+    pub pending_sync_mutations: i64,
+    pub sync_requires_review: i64,
+    pub last_sync_at: Option<String>,
+    pub pending_background_jobs: i64,
+    pub background_jobs_requires_review: i64,
+    pub failed_print_jobs: i64,
+    pub printer_configured: bool,
+    pub latest_backup: Option<DiagnosticBackupSummary>,
+    pub backup_schedule: Option<DiagnosticBackupScheduleSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1006,6 +1049,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0020)?;
         self.conn.execute_batch(MIGRATION_0021)?;
         self.conn.execute_batch(MIGRATION_0022)?;
+        self.conn.execute_batch(MIGRATION_0023)?;
         Ok(())
     }
     fn ensure_column(
@@ -1182,6 +1226,7 @@ impl Store {
             ("backup.restore", "Restore verified backups"),
             ("backup.schedule", "Configure scheduled backups"),
             ("backup.retention", "Prune scheduled backups"),
+            ("diagnostics.view", "View redacted operational diagnostics"),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),
