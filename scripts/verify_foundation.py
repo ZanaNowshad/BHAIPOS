@@ -344,6 +344,7 @@ required_commands={
     'cart_snapshot','hold_cart','list_held_carts','restore_cart',
     'find_refundable_sale','quote_refund','list_failed_print_jobs',
     'list_operational_alerts','transition_operational_alert',
+    'create_verified_backup','preview_verified_restore','restore_verified_backup',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -419,6 +420,11 @@ for trigger in ['immutable_backup_operation_results_update','immutable_backup_ev
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
+admin_api=(ROOT/'apps/desktop/src/api/admin.ts').read_text()
+for command in ['create_verified_backup','preview_verified_restore','restore_verified_backup']:
+    assert f"'{command}'" in admin_api, command
+for forbidden in ['destinationDirectory','safetyBackupDirectory','storagePath']:
+    assert forbidden not in admin_api, forbidden
 
 result={
     'schema_tables': len(tables),

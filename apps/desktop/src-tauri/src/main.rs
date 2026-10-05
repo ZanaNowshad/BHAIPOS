@@ -8,17 +8,19 @@ use bhaipos_core::{
     QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
-    CartSnapshot, CashMovementKind, CashMovementRequest as StoreCashMovementRequest,
-    CashMovementResult, CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
-    CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
-    FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
-    LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
-    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
-    RefundableSale, Store,
+    BackupCreateRequest as StoreBackupCreateRequest, BackupResult, CartSnapshot, CashMovementKind,
+    CashMovementRequest as StoreCashMovementRequest, CashMovementResult, CashSessionReport,
+    CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
+    CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult, FailedPrintJob,
+    HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult,
+    LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary, PaymentInput,
+    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
+    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::path::PathBuf;
 use tauri::{Manager, State};
 use uuid::Uuid;
 
@@ -33,6 +35,7 @@ struct AppState {
     store: Mutex<Store>,
     terminal: Mutex<Option<LocalTerminalContext>>,
     session: Mutex<Option<AuthenticatedSession>>,
+    backup_directory: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -184,6 +187,26 @@ struct TransitionOperationalAlertRequest {
     alert_id: String,
     new_status: String,
     note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateBackupRequest {
+    operation_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewRestoreRequest {
+    backup_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreBackupRequest {
+    operation_id: String,
+    backup_id: String,
+    expected_sha256: String,
 }
 
 fn command_error(error: impl std::fmt::Display) -> String {
@@ -762,6 +785,69 @@ fn transition_operational_alert(
         .map_err(command_error)
 }
 
+#[tauri::command]
+fn create_verified_backup(
+    state: State<'_, AppState>,
+    request: CreateBackupRequest,
+) -> Result<BackupResult, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .create_verified_backup(StoreBackupCreateRequest {
+            context: session.terminal,
+            user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
+            backup_type: "MANUAL".into(),
+            destination_directory: state.backup_directory.clone(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            now: Utc::now(),
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn preview_verified_restore(
+    state: State<'_, AppState>,
+    request: PreviewRestoreRequest,
+) -> Result<RestorePreview, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .preview_restore(
+            session.terminal,
+            session.user_id,
+            parse_uuid(&request.backup_id, "backup id")?,
+        )
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn restore_verified_backup(
+    state: State<'_, AppState>,
+    request: RestoreBackupRequest,
+) -> Result<RestoreResult, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .restore_verified_backup(StoreRestoreBackupRequest {
+            context: session.terminal,
+            user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
+            backup_id: parse_uuid(&request.backup_id, "backup id")?,
+            expected_sha256: request.expected_sha256,
+            safety_backup_directory: state.backup_directory.clone(),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            now: Utc::now(),
+        })
+        .map_err(command_error)
+}
+
 fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
     let state = handle.state::<AppState>();
     let terminal = state
@@ -881,6 +967,7 @@ fn main() {
                 store: Mutex::new(store),
                 terminal: Mutex::new(terminal),
                 session: Mutex::new(None),
+                backup_directory: data_dir.join("backups"),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
@@ -915,6 +1002,9 @@ fn main() {
             close_cash_session,
             list_operational_alerts,
             transition_operational_alert,
+            create_verified_backup,
+            preview_verified_restore,
+            restore_verified_backup,
         ])
         .run(tauri::generate_context!())
         .expect("BHAIPOS desktop runtime failed");
