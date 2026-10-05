@@ -755,7 +755,10 @@ fn diagnostics_are_permission_scoped_integrity_checked_and_redacted() {
         device_id: f.device,
         register_id: f.register,
     };
-    let denied = f.store.operational_diagnostics(context, f.user).unwrap_err();
+    let denied = f
+        .store
+        .operational_diagnostics(context, f.user)
+        .unwrap_err();
     assert!(matches!(
         denied,
         StoreError::Authorization("diagnostics.view")
@@ -796,7 +799,9 @@ fn diagnostics_are_permission_scoped_integrity_checked_and_redacted() {
     assert_eq!(diagnostics.foreign_key_violations, 0);
     assert_eq!(diagnostics.pending_background_jobs, 1);
 
-    let serialized = serde_json::to_string(&diagnostics).unwrap().to_ascii_lowercase();
+    let serialized = serde_json::to_string(&diagnostics)
+        .unwrap()
+        .to_ascii_lowercase();
     for forbidden in ["pin", "credential", "secret", "cookie", "token"] {
         assert!(!serialized.contains(forbidden), "leaked {forbidden}");
     }
