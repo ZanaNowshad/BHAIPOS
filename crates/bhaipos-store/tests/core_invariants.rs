@@ -4,10 +4,10 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    BackupCreateRequest, BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome,
-    CashMovementKind, CashMovementRequest, CheckoutRequest, CloseCashSessionRequest,
-    LocalBootstrapRequest, NewProduct, PaymentInput, RefundLineInput, RefundRequest,
-    RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest, CashMovementKind,
+    CashMovementRequest, CheckoutRequest, CloseCashSessionRequest, LocalBootstrapRequest,
+    NewProduct, PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest, Store,
+    StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -266,7 +266,10 @@ fn backup_restore_is_wal_safe_verified_owner_only_and_replay_safe() {
         app_version: "0.1.0".into(),
         now: now + chrono::Duration::minutes(1),
     };
-    let restored = f.store.restore_verified_backup(restore_request.clone()).unwrap();
+    let restored = f
+        .store
+        .restore_verified_backup(restore_request.clone())
+        .unwrap();
     assert_eq!(
         restored,
         f.store.restore_verified_backup(restore_request).unwrap()

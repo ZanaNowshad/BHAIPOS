@@ -79,12 +79,7 @@ impl Store {
                 backup.run_to_completion(128, Duration::from_millis(5), None)?;
             }
             drop(destination);
-            Self::verify_backup_database(
-                &partial_path,
-                request.context,
-                request.user_id,
-                false,
-            )?;
+            Self::verify_backup_database(&partial_path, request.context, request.user_id, false)?;
             if final_path.exists() {
                 fs::remove_file(&final_path)?;
             }
@@ -183,10 +178,14 @@ impl Store {
         let record = self.backup_record(context.tenant_id, backup_id)?;
         let (actual_hash, actual_size) = Self::hash_file(&record.storage_path)?;
         if actual_hash != record.sha256 {
-            return Err(StoreError::Conflict("backup hash verification failed".into()));
+            return Err(StoreError::Conflict(
+                "backup hash verification failed".into(),
+            ));
         }
         if actual_size != record.byte_size {
-            return Err(StoreError::Conflict("backup size verification failed".into()));
+            return Err(StoreError::Conflict(
+                "backup size verification failed".into(),
+            ));
         }
         Self::verify_backup_database(&record.storage_path, context, user, true)?;
         Ok(RestorePreview {
@@ -247,7 +246,8 @@ impl Store {
             app_version: request.app_version.clone(),
             now: request.now,
         })?;
-        let safety_record = self.backup_record(request.context.tenant_id, safety_result.backup_id)?;
+        let safety_record =
+            self.backup_record(request.context.tenant_id, safety_result.backup_id)?;
 
         let source = Connection::open(&source_record.storage_path)?;
         {
@@ -264,7 +264,7 @@ impl Store {
             restore_id,
             backup_id: request.backup_id,
             pre_restore_backup_id: safety_result.backup_id,
-            restored_sha256: preview.sha256,
+            restored_sha256: preview.sha256.clone(),
             completed_at: request.now.to_rfc3339(),
         };
         let tx = self
@@ -324,7 +324,9 @@ impl Store {
 
     fn prepare_backup_directory(path: &Path) -> Result<PathBuf, StoreError> {
         if path.as_os_str().is_empty() {
-            return Err(StoreError::Validation("backup directory is required".into()));
+            return Err(StoreError::Validation(
+                "backup directory is required".into(),
+            ));
         }
         fs::create_dir_all(path)?;
         Ok(fs::canonicalize(path)?)
@@ -371,8 +373,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let connection = Connection::open_with_flags(
             path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         let integrity: String =
             connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -381,11 +382,10 @@ impl Store {
                 "backup integrity check failed: {integrity}"
             )));
         }
-        let foreign_key_errors: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM pragma_foreign_key_check",
-            [],
-            |row| row.get(0),
-        )?;
+        let foreign_key_errors: i64 =
+            connection.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
         if foreign_key_errors != 0 {
             return Err(StoreError::Conflict(
                 "backup foreign-key check failed".into(),
@@ -426,11 +426,7 @@ impl Store {
         Ok(())
     }
 
-    fn assert_owner(
-        &self,
-        context: LocalTerminalContext,
-        user: UserId,
-    ) -> Result<(), StoreError> {
+    fn assert_owner(&self, context: LocalTerminalContext, user: UserId) -> Result<(), StoreError> {
         let owner: Option<i32> = self
             .conn
             .query_row(
