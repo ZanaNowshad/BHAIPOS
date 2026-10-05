@@ -470,8 +470,8 @@ impl Store {
             )?;
             let rows = statement
                 .query_map(
-                    params![operation_id.to_string(),context.tenant_id.to_string()],
-                    |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)),
+                    params![operation_id.to_string(), context.tenant_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
@@ -636,9 +636,9 @@ impl Store {
         let mut candidates = Vec::new();
         for (backup_id, storage_path, restore_referenced) in backups.into_iter().skip(retained) {
             if restore_referenced {
-                protected = protected
-                    .checked_add(1)
-                    .ok_or_else(|| StoreError::Validation("protected backup count overflow".into()))?;
+                protected = protected.checked_add(1).ok_or_else(|| {
+                    StoreError::Validation("protected backup count overflow".into())
+                })?;
             } else {
                 candidates.push((backup_id, storage_path));
             }

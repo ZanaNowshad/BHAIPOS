@@ -1176,7 +1176,8 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
                                 }
                             }
                             Ok(result) => BackgroundJobFinishOutcome::Succeeded {
-                                result_json: serde_json::to_string(&result).map_err(command_error)?,
+                                result_json: serde_json::to_string(&result)
+                                    .map_err(command_error)?,
                             },
                             Err(error) => BackgroundJobFinishOutcome::RequiresReview {
                                 error: error.to_string(),
