@@ -11,9 +11,8 @@ use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
     BackupCreateRequest as StoreBackupCreateRequest,
     BackupScheduleRequest as StoreBackupScheduleRequest, BackupScheduleResult, CartSnapshot,
-    CashMovementKind,
-    CashMovementRequest as StoreCashMovementRequest, CashMovementResult, CashSessionReport,
-    CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
+    CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
+    CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
     FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
     LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
@@ -1031,10 +1030,9 @@ fn background_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
             .last_backup_schedule_tick
             .lock()
             .map_err(|_| "backup schedule state poisoned".to_string())?;
-        let due = last_tick
-            .map_or(true, |previous| {
-                now.signed_duration_since(previous).num_seconds() >= 60
-            });
+        let due = last_tick.map_or(true, |previous| {
+            now.signed_duration_since(previous).num_seconds() >= 60
+        });
         if due {
             *last_tick = Some(now);
         }

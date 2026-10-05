@@ -65,9 +65,7 @@ impl Store {
         }
         let expires_at = request
             .now
-            .checked_add_signed(chrono::Duration::days(
-                request.authorization_valid_days,
-            ))
+            .checked_add_signed(chrono::Duration::days(request.authorization_valid_days))
             .ok_or_else(|| StoreError::Validation("authorization expiry overflow".into()))?;
         let state = if request.enabled {
             "ACTIVE"
@@ -87,7 +85,10 @@ impl Store {
         let existing: Option<(String, String, i64)> = tx
             .query_row(
                 "SELECT id,state,version FROM backup_schedules WHERE tenant_id=?1 AND device_id=?2",
-                params![request.context.tenant_id.to_string(), request.context.device_id.to_string()],
+                params![
+                    request.context.tenant_id.to_string(),
+                    request.context.device_id.to_string()
+                ],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -193,30 +194,45 @@ impl Store {
             let mut statement = tx.prepare(
                 "SELECT id,interval_minutes,retention_count,next_run_at,authorization_expires_at,authorized_by_user_id,state FROM backup_schedules WHERE tenant_id=?1 AND branch_id=?2 AND device_id=?3 AND state='ACTIVE' AND datetime(next_run_at)<=datetime(?4) ORDER BY next_run_at,id",
             )?;
-            statement
+            let rows = statement
                 .query_map(
-                    params![context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),now.to_rfc3339()],
-                    |row| Ok((row.get::<_,String>(0)?,row.get::<_,i64>(1)?,row.get::<_,i64>(2)?,row.get::<_,String>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,String>(6)?)),
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        context.device_id.to_string(),
+                        now.to_rfc3339()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, String>(6)?,
+                        ))
+                    },
                 )?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
         let mut result = BackupScheduleTickResult {
             enqueued: 0,
             requires_review: 0,
             job_ids: Vec::new(),
         };
-        for (schedule, interval, retention, next_run, expires, authorized_user, state) in
-            schedules
+        for (schedule, interval, retention, next_run, expires, authorized_user, state) in schedules
         {
             let schedule_id = Uuid::parse_str(&schedule)
                 .map_err(|_| StoreError::Validation("invalid backup schedule identity".into()))?;
-            let user = UserId(
-                Uuid::parse_str(&authorized_user).map_err(|_| {
-                    StoreError::Validation("invalid schedule authorization user".into())
-                })?,
-            );
+            let user = UserId(Uuid::parse_str(&authorized_user).map_err(|_| {
+                StoreError::Validation("invalid schedule authorization user".into())
+            })?);
             let expires_at = DateTime::parse_from_rfc3339(&expires)
-                .map_err(|_| StoreError::Validation("invalid schedule authorization expiry".into()))?
+                .map_err(|_| {
+                    StoreError::Validation("invalid schedule authorization expiry".into())
+                })?
                 .with_timezone(&Utc);
             let permission_count: i64 = tx.query_row(
                 "SELECT COUNT(DISTINCT rp.permission_code) FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles role ON role.id=ur.role_id JOIN role_permissions rp ON rp.role_id=role.id WHERE u.id=?1 AND u.tenant_id=?2 AND u.status='ACTIVE' AND role.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3) AND rp.permission_code IN ('backup.create','job.enqueue','job.execute')",
@@ -316,7 +332,8 @@ impl Store {
                 "SCHEDULED_BACKUP_ENQUEUED",
                 "background_job",
                 &job_id.to_string(),
-                &serde_json::json!({"schedule_id":schedule_id,"scheduled_for":next_run}).to_string(),
+                &serde_json::json!({"schedule_id":schedule_id,"scheduled_for":next_run})
+                    .to_string(),
                 now,
             )?;
             result.enqueued += 1;

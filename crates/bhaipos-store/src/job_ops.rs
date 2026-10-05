@@ -295,7 +295,9 @@ impl Store {
                 params![job_id,lease_token.to_string(),context.device_id.to_string(),lease_expires_at.to_rfc3339(),now.to_rfc3339(),context.tenant_id.to_string(),context.branch_id.to_string()],
             )?;
             if changed != 1 {
-                return Err(StoreError::Conflict("scheduled backup job lease lost".into()));
+                return Err(StoreError::Conflict(
+                    "scheduled backup job lease lost".into(),
+                ));
             }
             let parsed_job_id = Uuid::parse_str(&job_id)
                 .map_err(|_| StoreError::Validation("invalid background job identity".into()))?;

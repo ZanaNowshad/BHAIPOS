@@ -389,12 +389,8 @@ fn scheduled_backups_enqueue_once_and_expired_authority_requires_review() {
     f.store
         .grant_permission(owner_role, "backup.create")
         .unwrap();
-    f.store
-        .grant_permission(owner_role, "job.enqueue")
-        .unwrap();
-    f.store
-        .grant_permission(owner_role, "job.execute")
-        .unwrap();
+    f.store.grant_permission(owner_role, "job.enqueue").unwrap();
+    f.store.grant_permission(owner_role, "job.execute").unwrap();
     f.store
         .assign_role(f.user, owner_role, Some(f.branch))
         .unwrap();
@@ -417,7 +413,10 @@ fn scheduled_backups_enqueue_once_and_expired_authority_requires_review() {
         now,
     };
     let schedule = f.store.configure_backup_schedule(request.clone()).unwrap();
-    assert_eq!(schedule, f.store.configure_backup_schedule(request).unwrap());
+    assert_eq!(
+        schedule,
+        f.store.configure_backup_schedule(request).unwrap()
+    );
     assert_eq!(schedule.state, "ACTIVE");
     assert!(matches!(
         f.store.configure_backup_schedule(BackupScheduleRequest {
