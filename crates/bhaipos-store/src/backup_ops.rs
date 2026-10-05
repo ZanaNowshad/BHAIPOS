@@ -2,7 +2,7 @@ use super::*;
 use rusqlite::backup::Backup;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::time::Duration;
 
@@ -350,6 +350,383 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(result)
+    }
+
+    pub fn record_scheduled_backup_output(
+        &mut self,
+        context: LocalTerminalContext,
+        user: UserId,
+        schedule_id: Uuid,
+        job_id: Uuid,
+        backup_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        self.validate_local_session(context, user)?;
+        let existing: Option<(String, String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT schedule_id,backup_id,device_id,user_id FROM scheduled_backup_outputs WHERE tenant_id=?1 AND job_id=?2",
+                params![context.tenant_id.to_string(),job_id.to_string()],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+            )
+            .optional()?;
+        if let Some((stored_schedule, stored_backup, stored_device, stored_user)) = existing {
+            if stored_schedule == schedule_id.to_string()
+                && stored_backup == backup_id.to_string()
+                && stored_device == context.device_id.to_string()
+                && stored_user == user.to_string()
+            {
+                return Ok(());
+            }
+            return Err(StoreError::Conflict(
+                "scheduled backup job was already linked to different evidence".into(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "backup.create",
+        )?;
+        tx.execute(
+            "INSERT INTO scheduled_backup_outputs(tenant_id,branch_id,schedule_id,backup_id,job_id,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![context.tenant_id.to_string(),context.branch_id.to_string(),schedule_id.to_string(),backup_id.to_string(),job_id.to_string(),context.device_id.to_string(),user.to_string(),now.to_rfc3339()],
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "SCHEDULED_BACKUP_RECORDED",
+            "backup",
+            &backup_id.to_string(),
+            &serde_json::json!({"schedule_id":schedule_id,"job_id":job_id}).to_string(),
+            now,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn prune_scheduled_backups(
+        &mut self,
+        context: LocalTerminalContext,
+        user: UserId,
+        operation_id: OperationId,
+        schedule_id: Uuid,
+        backup_directory: &Path,
+        now: DateTime<Utc>,
+    ) -> Result<BackupRetentionResult, StoreError> {
+        self.validate_local_session(context, user)?;
+        self.assert_owner(context, user)?;
+        let trusted_directory = Self::prepare_backup_directory(backup_directory)?;
+        let digest = sha256_hex(&serde_json::to_vec(&serde_json::json!({
+            "branch_id":context.branch_id,
+            "device_id":context.device_id,
+            "schedule_id":schedule_id,
+            "trusted_directory":trusted_directory,
+        }))?);
+        if let Some(result) =
+            self.load_backup_retention_operation(context.tenant_id, operation_id, &digest)?
+        {
+            return Ok(result);
+        }
+        let existing: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT request_sha256,state FROM backup_retention_runs WHERE tenant_id=?1 AND operation_id=?2",
+                params![context.tenant_id.to_string(),operation_id.to_string()],
+                |row| Ok((row.get(0)?,row.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            Some((stored_digest, _)) if stored_digest != digest => {
+                return Err(StoreError::Conflict(
+                    "backup retention operation id was reused with a different request".into(),
+                ));
+            }
+            Some((_, state)) if state != "RUNNING" => {
+                return Err(StoreError::Conflict(
+                    "backup retention completed without replay evidence".into(),
+                ));
+            }
+            Some(_) => {}
+            None => self.plan_backup_retention(
+                context,
+                user,
+                operation_id,
+                schedule_id,
+                &trusted_directory,
+                &digest,
+                now,
+            )?,
+        }
+        let pending = {
+            let mut statement = self.conn.prepare(
+                "SELECT backup_id,storage_path FROM backup_retention_items WHERE run_id=?1 AND tenant_id=?2 AND state='PENDING' ORDER BY backup_id",
+            )?;
+            let rows = statement
+                .query_map(
+                    params![operation_id.to_string(), context.tenant_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (backup_id_text, storage_path_text) in pending {
+            let backup_id = Uuid::parse_str(&backup_id_text)
+                .map_err(|_| StoreError::Validation("invalid retention backup identity".into()))?;
+            let deletion = Self::delete_planned_backup_file(
+                &trusted_directory,
+                backup_id,
+                Path::new(&storage_path_text),
+            );
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            match deletion {
+                Ok(()) => {
+                    tx.execute(
+                        "UPDATE backup_retention_items SET state='PRUNED',error_text=NULL,updated_at=?3 WHERE run_id=?1 AND backup_id=?2 AND state='PENDING'",
+                        params![operation_id.to_string(),backup_id_text,now.to_rfc3339()],
+                    )?;
+                    tx.execute(
+                        "UPDATE backup_records SET state='PRUNED',integrity_state='PRUNED' WHERE id=?1 AND tenant_id=?2 AND state='SUCCEEDED'",
+                        params![backup_id_text,context.tenant_id.to_string()],
+                    )?;
+                    Self::append_backup_event(
+                        &tx,
+                        context,
+                        user,
+                        Some(backup_id),
+                        None,
+                        "BACKUP_PRUNED",
+                        &serde_json::json!({"schedule_id":schedule_id,"retention_run_id":operation_id}),
+                        now,
+                    )?;
+                }
+                Err(error) => {
+                    tx.execute(
+                        "UPDATE backup_retention_items SET state='FAILED',error_text=?3,updated_at=?4 WHERE run_id=?1 AND backup_id=?2 AND state='PENDING'",
+                        params![operation_id.to_string(),backup_id_text,error.to_string(),now.to_rfc3339()],
+                    )?;
+                }
+            }
+            tx.commit()?;
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (pruned, failed): (i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(CASE WHEN state='PRUNED' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='FAILED' THEN 1 ELSE 0 END),0) FROM backup_retention_items WHERE run_id=?1 AND tenant_id=?2",
+            params![operation_id.to_string(),context.tenant_id.to_string()],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        )?;
+        let (retained, protected): (i64, i64) = tx.query_row(
+            "SELECT retained_count,protected_count FROM backup_retention_runs WHERE id=?1 AND tenant_id=?2 AND state='RUNNING'",
+            params![operation_id.to_string(),context.tenant_id.to_string()],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        )?;
+        let result = BackupRetentionResult {
+            run_id: operation_id.0,
+            pruned: usize::try_from(pruned)
+                .map_err(|_| StoreError::Validation("invalid pruned count".into()))?,
+            protected: usize::try_from(protected)
+                .map_err(|_| StoreError::Validation("invalid protected count".into()))?,
+            retained: usize::try_from(retained)
+                .map_err(|_| StoreError::Validation("invalid retained count".into()))?,
+            failed: usize::try_from(failed)
+                .map_err(|_| StoreError::Validation("invalid failed count".into()))?,
+        };
+        let state = if failed == 0 { "SUCCEEDED" } else { "FAILED" };
+        tx.execute(
+            "UPDATE backup_retention_runs SET state=?2,completed_at=?3,result_json=?4 WHERE id=?1 AND state='RUNNING'",
+            params![operation_id.to_string(),state,now.to_rfc3339(),serde_json::to_string(&result)?],
+        )?;
+        Self::record_backup_retention_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            &digest,
+            &result,
+            now,
+        )?;
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "BACKUP_RETENTION_COMPLETED",
+            "backup_schedule",
+            &schedule_id.to_string(),
+            &serde_json::to_string(&result)?,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn plan_backup_retention(
+        &mut self,
+        context: LocalTerminalContext,
+        user: UserId,
+        operation_id: OperationId,
+        schedule_id: Uuid,
+        trusted_directory: &Path,
+        digest: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        let trusted_directory_text = trusted_directory
+            .to_str()
+            .ok_or_else(|| StoreError::Validation("backup path must be valid Unicode".into()))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::assert_permission(
+            &tx,
+            context.tenant_id,
+            context.branch_id,
+            user,
+            "backup.retention",
+        )?;
+        let retention_count: i64 = tx
+            .query_row(
+                "SELECT retention_count FROM backup_schedules WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND device_id=?4",
+                params![
+                    schedule_id.to_string(),
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    context.device_id.to_string()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(StoreError::NotFound("backup schedule"))?;
+        let backups = {
+            let mut statement = tx.prepare(
+                "SELECT b.id,b.storage_path,EXISTS(SELECT 1 FROM restore_runs r WHERE r.tenant_id=b.tenant_id AND (r.backup_id=b.id OR r.pre_restore_backup_id=b.id)) FROM scheduled_backup_outputs output JOIN backup_records b ON b.id=output.backup_id AND b.tenant_id=output.tenant_id WHERE output.tenant_id=?1 AND output.branch_id=?2 AND output.schedule_id=?3 AND output.device_id=?4 AND b.state='SUCCEEDED' AND b.integrity_state='VERIFIED' ORDER BY b.created_at DESC,b.id DESC",
+            )?;
+            let rows = statement
+                .query_map(
+                    params![
+                        context.tenant_id.to_string(),
+                        context.branch_id.to_string(),
+                        schedule_id.to_string(),
+                        context.device_id.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)? != 0,
+                        ))
+                    },
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let retention_count_usize = usize::try_from(retention_count)
+            .map_err(|_| StoreError::Validation("invalid backup retention count".into()))?;
+        let retained = backups.len().min(retention_count_usize);
+        let mut protected = 0_usize;
+        let mut candidates = Vec::new();
+        for (backup_id, storage_path, restore_referenced) in backups.into_iter().skip(retained) {
+            if restore_referenced {
+                protected = protected.checked_add(1).ok_or_else(|| {
+                    StoreError::Validation("protected backup count overflow".into())
+                })?;
+            } else {
+                candidates.push((backup_id, storage_path));
+            }
+        }
+        tx.execute(
+            "INSERT INTO backup_retention_runs(id,tenant_id,branch_id,schedule_id,operation_id,request_sha256,trusted_directory,retention_count,retained_count,protected_count,state,device_id,user_id,created_at) VALUES(?1,?2,?3,?4,?1,?5,?6,?7,?8,?9,'RUNNING',?10,?11,?12)",
+            params![
+                operation_id.to_string(),
+                context.tenant_id.to_string(),
+                context.branch_id.to_string(),
+                schedule_id.to_string(),
+                digest,
+                trusted_directory_text,
+                retention_count,
+                i64::try_from(retained)
+                    .map_err(|_| StoreError::Validation("retained backup count overflow".into()))?,
+                i64::try_from(protected)
+                    .map_err(|_| StoreError::Validation("protected backup count overflow".into()))?,
+                context.device_id.to_string(),
+                user.to_string(),
+                now.to_rfc3339(),
+            ],
+        )?;
+        for (backup_id, storage_path) in &candidates {
+            tx.execute(
+                "INSERT INTO backup_retention_items(run_id,tenant_id,backup_id,storage_path,state,updated_at) VALUES(?1,?2,?3,?4,'PENDING',?5)",
+                params![
+                    operation_id.to_string(),
+                    context.tenant_id.to_string(),
+                    backup_id,
+                    storage_path,
+                    now.to_rfc3339()
+                ],
+            )?;
+        }
+        Self::append_audit(
+            &tx,
+            context.tenant_id,
+            context.device_id,
+            user,
+            "BACKUP_RETENTION_PLANNED",
+            "backup_schedule",
+            &schedule_id.to_string(),
+            &serde_json::json!({
+                "run_id":operation_id,
+                "retained":retained,
+                "protected":protected,
+                "candidates":candidates.len(),
+            })
+            .to_string(),
+            now,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn delete_planned_backup_file(
+        trusted_directory: &Path,
+        backup_id: Uuid,
+        stored_path: &Path,
+    ) -> Result<(), StoreError> {
+        let expected_name = format!("bhaipos-{backup_id}.sqlite3");
+        if stored_path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
+            return Err(StoreError::Validation(
+                "scheduled backup path does not match its immutable identity".into(),
+            ));
+        }
+        let parent = stored_path.parent().ok_or_else(|| {
+            StoreError::Validation("scheduled backup path has no parent directory".into())
+        })?;
+        let canonical_parent = fs::canonicalize(parent)?;
+        if canonical_parent != trusted_directory {
+            return Err(StoreError::Validation(
+                "scheduled backup path escapes the trusted backup directory".into(),
+            ));
+        }
+        let metadata = match fs::symlink_metadata(stored_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(StoreError::Validation(
+                "scheduled backup target must be a regular file".into(),
+            ));
+        }
+        fs::remove_file(stored_path)?;
+        Ok(())
     }
 
     pub fn create_verified_backup(
@@ -929,6 +1306,46 @@ impl Store {
         tx.execute(
             "INSERT INTO backup_schedule_operation_results(tenant_id,operation_id,action,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5,?6)",
             params![tenant.to_string(),operation.to_string(),action,digest,serde_json::to_string(result)?,now.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    fn load_backup_retention_operation(
+        &self,
+        tenant: TenantId,
+        operation: OperationId,
+        digest: &str,
+    ) -> Result<Option<BackupRetentionResult>, StoreError> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT request_sha256,result_json FROM backup_retention_operation_results WHERE tenant_id=?1 AND operation_id=?2",
+                params![tenant.to_string(),operation.to_string()],
+                |row| Ok((row.get(0)?,row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((stored_digest, result)) if stored_digest == digest => {
+                Ok(Some(serde_json::from_str(&result)?))
+            }
+            Some(_) => Err(StoreError::Conflict(
+                "backup retention operation id was reused with a different request".into(),
+            )),
+        }
+    }
+
+    fn record_backup_retention_operation(
+        tx: &Transaction<'_>,
+        tenant: TenantId,
+        operation: OperationId,
+        digest: &str,
+        result: &BackupRetentionResult,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        tx.execute(
+            "INSERT INTO backup_retention_operation_results(tenant_id,operation_id,request_sha256,result_json,committed_at) VALUES(?1,?2,?3,?4,?5)",
+            params![tenant.to_string(),operation.to_string(),digest,serde_json::to_string(result)?,now.to_rfc3339()],
         )?;
         Ok(())
     }

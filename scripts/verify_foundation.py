@@ -23,6 +23,7 @@ UPGRADE_0018=ROOT/'migrations/0018_operational_alerts.sql'
 UPGRADE_0019=ROOT/'migrations/0019_background_jobs.sql'
 UPGRADE_0020=ROOT/'migrations/0020_backup_restore.sql'
 UPGRADE_0021=ROOT/'migrations/0021_backup_scheduling.sql'
+UPGRADE_0022=ROOT/'migrations/0022_backup_retention.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -94,6 +95,7 @@ def apply_schema(con, include_payload_binding=True):
                 con.execute(ddl)
         con.executescript(UPGRADE_0020.read_text())
         con.executescript(UPGRADE_0021.read_text())
+        con.executescript(UPGRADE_0022.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -143,7 +145,8 @@ critical={
     'expense_operation_results','expense_events','expense_payments',
     'delivery_operation_results','delivery_state_events','delivery_collections','delivery_cash_settlements','delivery_cash_settlement_allocations',
     'employee_operation_results','attendance_operation_results','attendance_sessions','attendance_session_events',
-    'alert_operation_results','operational_alert_events','background_job_operation_results','background_job_events'
+    'alert_operation_results','operational_alert_events','background_job_operation_results','background_job_events',
+    'scheduled_backup_outputs','backup_retention_runs','backup_retention_items','backup_retention_operation_results'
 }
 missing=critical-tables
 assert not missing, f'missing critical tables: {sorted(missing)}'
@@ -356,7 +359,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0021_backup_scheduling"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0022_backup_retention"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -420,11 +423,13 @@ for trigger in ['guard_background_job_insert','guard_background_job_update','gua
 backup_ops=(ROOT/'crates/bhaipos-store/src/backup_ops.rs').read_text()
 for symbol in ['create_verified_backup','preview_restore','restore_verified_backup','integrity_check','foreign_key_check','PRE_RESTORE']:
     assert symbol in backup_ops, symbol
-for symbol in ['configure_backup_schedule','enqueue_due_backup_jobs','backup_schedule_operation_results','AUTHORIZATION_REVIEW_REQUIRED']:
+for symbol in ['configure_backup_schedule','enqueue_due_backup_jobs','backup_schedule_operation_results','AUTHORIZATION_REVIEW_REQUIRED','record_scheduled_backup_output','prune_scheduled_backups','delete_planned_backup_file']:
     assert symbol in backup_ops, symbol
 for trigger in ['immutable_backup_operation_results_update','immutable_backup_events_update','immutable_backup_records_identity','guard_backup_record_scope','guard_backup_event_scope']:
     assert trigger in triggers, trigger
 for trigger in ['immutable_backup_schedule_events_update','immutable_backup_schedule_operation_results_update','immutable_backup_schedule_identity','guard_backup_schedule_scope_insert','guard_backup_schedule_event_scope']:
+    assert trigger in triggers, trigger
+for trigger in ['immutable_scheduled_backup_outputs_update','immutable_backup_retention_operation_results_update','immutable_backup_retention_run_identity','guard_backup_retention_run_update','guard_backup_retention_item_update','guard_scheduled_backup_output_scope','guard_backup_retention_run_scope','guard_backup_retention_item_scope']:
     assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge

@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
 Assessment date: 2026-10-05
-Authority baseline: public `main` commit `7a7ff7b54a950b481589d7a138305d2c2cee5b16` plus scheduled-backup work under review
-Working branch: `codex/backup-scheduling-20261005`
+Authority baseline: public `main` commit `8791e41da343a01d7952337261871c2d9c4e5127` plus retention commit `898a7a5c11f659ebebe25ff976f66827267b4df8` under review
+Working branch: `codex/backup-retention-20261005`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -56,7 +56,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 37 | AI back office | NOT STARTED | Safety/action/undo schema and architecture boundary documented | Tool registry, policy engine, previews, confirmations and providers missing |
 | 38 | Knowledge base | NOT STARTED | Versioned-document schema only | Storage, indexing, permissions and archive flows required |
 | 39 | Imports and exports | NOT STARTED | No executable wizard | CSV/XLSX mapping, conservative match, audit and formula-injection handling required |
-| 40 | Backup, restore and DB health | IN PROGRESS | `0020_backup_restore.sql` and `0021_backup_scheduling.sql`; SQLite online backup; streaming SHA-256; integrity/foreign-key checks; tenant/terminal/schema compatibility preview; owner-only restore; verified pre-restore safety backup; staged restore evidence; durable manual dispatch; bounded owner-authorized recurring schedules; atomic exact-once due enqueue; expired/suspended/permission-revoked authority routes to `REQUIRES_REVIEW`; trusted logged-out worker claims; typed authority-free desktop configuration contract; GitHub Actions run `37308423966` passes all jobs | Retention pruning, administration screen, encryption/key custody, external-backup import policy and clean-Windows crash/corruption acceptance remain |
+| 40 | Backup, restore and DB health | IN PROGRESS | `0020_backup_restore.sql`, `0021_backup_scheduling.sql` and `0022_backup_retention.sql`; SQLite online backup; streaming SHA-256; integrity/foreign-key checks; tenant/terminal/schema compatibility preview; owner-only restore; verified pre-restore safety backup; staged restore evidence; durable manual dispatch; bounded owner-authorized recurring schedules; atomic exact-once due enqueue; expired/suspended/permission-revoked authority routes to `REQUIRES_REVIEW`; trusted logged-out worker claims; typed authority-free desktop configuration contract; restore-reference-preserving, path-confined, replay-safe retention with durable run/item evidence; GitHub Actions runs `37308423966` and `37377389533` pass all jobs | Administration screen, encryption/key custody, external-backup import policy and clean-Windows crash/corruption acceptance remain |
 | 41 | Background jobs | IN PROGRESS | `0019_background_jobs.sql`; payload-bound enqueue; replay-safe claim/heartbeat/progress/finish/recovery operations; opaque leases; bounded monotonic progress; cancellation; retry backoff; immutable events; trusted RBAC/scope/audit boundary; concrete backup handler plus schedule-authorized unattended claims; GitHub Actions runs `37240547597`, `37258354228`, `37261516269` and `37308423966` pass all jobs | Concrete handlers for restore, import/export, OCR, AI, sync and analytics and Windows interruption exercise remain |
 | 42 | Diagnostics | NOT STARTED | Diagnostic data model inputs exist | Redacted export and runtime checks required |
 | 43 | Update and release security | NOT STARTED | Tauri packaging shell and CI core checks only | Signed updater, Authenticode, manifest, SBOM and provenance required |
@@ -64,15 +64,15 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 45 | Feature flags | NOT STARTED | Feature-flag schema only | Runtime gating and disabled-module tests required |
 | 46 | Retail UI/UX | IN PROGRESS | Cashier/Admin/Shift shells and visual previews | Production workflows, dark theme, Arabic/RTL and scanner-focus E2E missing |
 | 47 | Performance targets | NOT STARTED | Indexes exist for core lookups | 100k/500k/million-row benchmark and budgets not measured |
-| 48 | Invariant/failure testing | IN PROGRESS | Rust core invariant suite includes money overflow, zero-value transaction and audit topology cases; Python schema verification passes | Cargo execution and full failure-injection/recovery matrix missing |
+| 48 | Invariant/failure testing | IN PROGRESS | Rust core invariant suite includes money overflow, zero-value transaction, audit topology, scheduled-retention replay, restore-reference preservation and trusted-path rejection; Python schema verification passes; GitHub Actions run `37377389533` passes formatting, strict Clippy, all Rust tests and both desktop build gates | Full Windows and multi-process failure-injection/recovery matrix remains missing |
 | 49 | Clean Windows acceptance | BLOCKED | Acceptance requirements documented | No BHAIPOS Windows artifact or clean Windows run yet |
 | 50 | Dependency-ordered implementation | IN PROGRESS | Core-invariant-first architecture and migrations | Proceed through typed command bridge before broad modules |
 | 51 | Execution discipline | IN PROGRESS | Focused migrations/tests and evidence records used | CI/runtime evidence must accompany every future capability |
 | 52 | Requirement traceability | VERIFIED | This matrix exists and links status to source/evidence | Update on every material change; never upgrade status without evidence |
 | 53 | Definition of complete | IN PROGRESS | Release blockers and evidence rules documented | Product is not complete or production-ready |
 | 54 | Out-of-scope drift control | VERIFIED | Boundaries documented in architecture/status files | Re-evaluate when enabling accounting/payroll/provider modules |
-| 55 | Evidence-based reporting | VERIFIED | `VERIFICATION.md`, this matrix and exact local baseline/branch | GitHub/CI identifiers can be added only after write access and runs exist |
+| 55 | Evidence-based reporting | VERIFIED | `VERIFICATION.md`, this matrix, exact branch/commit identifiers and GitHub Actions evidence including run `37377389533` | Continue recording clean-Windows, signing and hardware evidence as it becomes available |
 
 ## Current highest-leverage next gate
 
-Add safe scheduled-backup retention pruning and its owner administration screen, then exercise interruption recovery on Windows before enabling restore in production UI.
+Add the owner backup administration screen and redacted database-health diagnostics, then exercise backup/restore interruption recovery on Windows before enabling restore in production UI.

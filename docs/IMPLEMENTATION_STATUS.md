@@ -11,9 +11,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-one SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 167 application tables created.
-- 243 integrity/security triggers created.
+- All twenty-two SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 171 application tables created.
+- 256 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -44,9 +44,12 @@ Status vocabulary:
 - Background-job migration reapplication, tenant/branch/device/user scope, legal state transitions, append-only event evidence and payload-bound operation-result guards pass.
 - Backup/restore migration reapplication, immutable operation/event evidence, tenant/device/user guards and historical record identity guards pass.
 - Backup-schedule migration reapplication, payload-bound configuration/ticks, bounded authorization expiry, atomic due-job enqueue and immutable schedule evidence guards pass.
+- Backup-retention migration reapplication, append-only schedule/output evidence, legal run/item transitions, tenant/device scope guards and payload-bound result replay pass.
 
 **CI VERIFIED**
 
+- GitHub Actions run `37377389533` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for safe scheduled-backup retention.
+- Scheduled backup output is linked durably to its originating schedule/job/device. Retention keeps the configured newest set, preserves every restore-referenced backup, uses a payload-bound replay-safe operation, refuses symlinks/non-files/path escape, resumes safely after delete-before-record interruption and routes deletion failures to review.
 - GitHub Actions run `37308423966` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for bounded scheduled backups.
 - Recurring backup configuration and due evaluation are payload-bound and device-scoped; due enqueue/checkpoint movement is atomic; expired, suspended or permission-revoked authority fails closed to review; logged-out claims revalidate the active schedule and its authorizing user before execution.
 - GitHub Actions run `37261516269` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for the trusted backup administration bridge and durable backup worker dispatch.
@@ -115,7 +118,7 @@ Status vocabulary:
 
 ## Schema-ready modules requiring service implementation
 
-Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; concrete job handlers for imports, OCR, AI and sync; scheduled-backup retention pruning; feature flags; diagnostics/update records.
+Product/category scheduling; branch/channel pricing APIs; price/cost history commands; pricing policy and repricing review; margin protection; promotions/coupons/conflict resolution; bundles/hampers; FEFO allocation; near-expiry markdown workflow; transfer cancellation; batch inventory operations; valuation-at-date/slow/dead stock/replenishment queries; procurement administration UI and approval thresholds; invoice attachments/credit-note depth; expense attachments/approval thresholds and petty-cash reconciliation; customers/addresses; loyalty earn/redeem/expiry; credit allocation/statements/aging; delivery/courier workspace and return/refund compensation; digital order hub; marketplace settlement reconciliation; production planning/yield; attendance scheduling/late/early UI; WhatsApp metadata; OCR review records; AI action/undo metadata; document library; overdue-customer-credit and settlement-discrepancy alert producers after their authoritative domains exist; concrete job handlers for imports, OCR, AI and sync; feature flags; diagnostics/update records.
 
 ## Runtime components still not implemented
 
@@ -132,7 +135,7 @@ Product/category scheduling; branch/channel pricing APIs; price/cost history com
 - OCR engine/provider integration and review UI.
 - AI provider adapters, tool registry, risk classifier, confirmation UX, compensating/undo executor and knowledge retrieval.
 - Windows Credential Manager integration for secrets.
-- Scheduled-backup retention pruning, administration UI, encryption/key custody and Windows crash-interruption exercise. Narrow trusted commands, durable manual-backup dispatch and bounded unattended scheduling are implemented.
+- Backup administration UI, encryption/key custody, external-backup import policy and Windows crash-interruption exercise. Narrow trusted commands, durable manual-backup dispatch, bounded unattended scheduling and safe replayable retention pruning are implemented.
 - Import/migration wizard and spreadsheet injection sanitizer.
 - Reports/analytics query layer and export generators.
 - Signed updater and rollback behavior.
