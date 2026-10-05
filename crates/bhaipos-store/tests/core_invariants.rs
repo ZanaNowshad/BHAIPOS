@@ -4115,8 +4115,8 @@ fn operational_alert_evaluation_is_idempotent_scoped_and_evidence_driven() {
     ).unwrap();
     let backup = Uuid::new_v4();
     f.store.connection().execute(
-        "INSERT INTO backup_records(id,tenant_id,branch_id,backup_type,storage_path,sha256,schema_version,app_version,state,integrity_state,created_at) VALUES(?1,?2,?3,'SCHEDULED','backup.db',?4,'0018','0.1.0','FAILED','FAILED',?5)",
-        params![backup.to_string(),f.tenant.to_string(),f.branch.to_string(),"0".repeat(64),now.to_rfc3339()],
+        "INSERT INTO backup_records(id,tenant_id,branch_id,backup_type,storage_path,sha256,schema_version,app_version,state,integrity_state,created_at,origin_device_id,created_by_user_id,operation_id) VALUES(?1,?2,?3,'SCHEDULED','backup.db',?4,'0018','0.1.0','FAILED','FAILED',?5,?6,?7,?8)",
+        params![backup.to_string(),f.tenant.to_string(),f.branch.to_string(),"0".repeat(64),now.to_rfc3339(),f.device.to_string(),f.user.to_string(),OperationId::new().to_string()],
     ).unwrap();
     f.store
         .connection()
