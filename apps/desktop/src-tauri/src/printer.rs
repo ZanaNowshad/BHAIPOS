@@ -1,5 +1,11 @@
+pub struct PrinterProbe {
+    pub state: &'static str,
+    pub detail: String,
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
+    use super::PrinterProbe;
     use std::{
         ffi::c_void,
         fs::OpenOptions,
@@ -98,6 +104,68 @@ mod platform {
         result
     }
 
+    pub fn probe(transport: &str, target: Option<&str>) -> PrinterProbe {
+        match transport {
+            "WINDOWS_SPOOLER" => {
+                let printer = match target {
+                    Some(name) if !name.trim().is_empty() => Ok(wide(name.trim())),
+                    _ => default_printer_name(),
+                };
+                let printer = match printer {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return PrinterProbe {
+                            state: "UNAVAILABLE",
+                            detail: error,
+                        }
+                    }
+                };
+                let mut handle: HANDLE = null_mut();
+                if unsafe { OpenPrinterW(printer.as_ptr(), &mut handle, null()) } == 0 {
+                    return PrinterProbe {
+                        state: "UNAVAILABLE",
+                        detail: format!(
+                            "Windows spooler printer cannot be opened: {}",
+                            std::io::Error::last_os_error()
+                        ),
+                    };
+                }
+                unsafe { ClosePrinter(handle) };
+                PrinterProbe {
+                    state: "REACHABLE",
+                    detail: "Windows spooler printer handle opened successfully".into(),
+                }
+            }
+            "SERIAL" => {
+                let Some(port) = target.filter(|value| !value.trim().is_empty()) else {
+                    return PrinterProbe {
+                        state: "MISCONFIGURED",
+                        detail: "Serial printer target is missing".into(),
+                    };
+                };
+                let path = if port.starts_with(r"\\.\") {
+                    port.to_string()
+                } else {
+                    format!(r"\\.\{}", port.trim())
+                };
+                match OpenOptions::new().write(true).open(path) {
+                    Ok(_) => PrinterProbe {
+                        state: "REACHABLE",
+                        detail: "Serial printer port opened successfully".into(),
+                    },
+                    Err(error) => PrinterProbe {
+                        state: "UNAVAILABLE",
+                        detail: format!("Serial printer port cannot be opened: {error}"),
+                    },
+                }
+            }
+            _ => PrinterProbe {
+                state: "MISCONFIGURED",
+                detail: "Unsupported printer transport".into(),
+            },
+        }
+    }
+
     pub fn print_bytes(
         transport: &str,
         target: Option<&str>,
@@ -131,6 +199,15 @@ mod platform {
 
 #[cfg(not(target_os = "windows"))]
 mod platform {
+    use super::PrinterProbe;
+
+    pub fn probe(_transport: &str, _target: Option<&str>) -> PrinterProbe {
+        PrinterProbe {
+            state: "UNSUPPORTED_PLATFORM",
+            detail: "Windows printer probing is unavailable on this operating system".into(),
+        }
+    }
+
     pub fn print_bytes(
         _transport: &str,
         _target: Option<&str>,
@@ -141,4 +218,14 @@ mod platform {
     }
 }
 
-pub use platform::print_bytes;
+pub use platform::{print_bytes, probe};
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    #[test]
+    fn probe_reports_unsupported_platform_without_exposing_target() {
+        let result = super::probe("SERIAL", Some("COM-SECRET"));
+        assert_eq!(result.state, "UNSUPPORTED_PLATFORM");
+        assert!(!result.detail.contains("COM-SECRET"));
+    }
+}

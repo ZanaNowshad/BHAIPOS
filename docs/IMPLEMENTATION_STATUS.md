@@ -50,6 +50,7 @@ Status vocabulary:
 - Backup-retention migration reapplication, append-only schedule/output evidence, legal run/item transitions, tenant/device scope guards and payload-bound result replay pass.
 - Diagnostics migration reapplication, explicit view permission, immutable scoped snapshot guards and redacted typed command-surface checks pass.
 - Diagnostic export migration reapplication, explicit export permission, immutable operation evidence, tenant/device scope, path-free renderer contract and atomic trusted-directory export boundary checks pass.
+- Diagnostics include a target-redacted live reachability probe for the configured Windows spooler or serial printer; non-Windows platforms explicitly report unsupported rather than fabricating readiness.
 
 **CI VERIFIED**
 
@@ -133,7 +134,7 @@ Product/category scheduling; branch/channel pricing APIs; price/cost history com
 
 - Cashier line mutation, customer association, promotions, price override and manager-approval UX remain incomplete; committed totals are already trusted-service authoritative.
 - Full Admin CRUD and report/analytics UI.
-- Physical Windows printer validation, printer configuration UI, QR/barcode commands and printer-health diagnostics remain incomplete. The RAW spooler/COM worker, cut, policy-bound drawer pulse and durable retry boundary are implemented but not natively built or hardware-tested here.
+- Physical Windows printer validation, printer configuration UI, QR/barcode commands and detailed device-status diagnostics remain incomplete. The RAW spooler/COM worker, live handle/port reachability probe, cut, policy-bound drawer pulse and durable retry boundary are implemented but not hardware-tested here.
 - Petty-cash fund runtime and reconciliation beyond drawer-linked petty cash remains incomplete.
 - Printable X/Z report document rendering and ESC/POS delivery remain incomplete; the underlying session accounting is implemented.
 - Deployable branch hub process/network adapter and Reconciliation Centre UI remain incomplete; the authenticated envelope acceptance, enrollment, durable lease/backoff, lost-response replay, watermark and append-only resolution domain services are implemented but await Rust/multi-process execution.

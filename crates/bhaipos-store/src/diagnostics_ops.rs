@@ -121,6 +121,8 @@ impl Store {
         let hub_mode = Self::diagnostic_label(&request.hub_mode, "hub mode")?;
         let whatsapp_status = Self::diagnostic_label(&request.whatsapp_status, "WhatsApp status")?;
         let ocr_status = Self::diagnostic_label(&request.ocr_status, "OCR status")?;
+        let printer_state = Self::diagnostic_label(&request.printer_state, "printer state")?;
+        let printer_detail = Self::diagnostic_label(&request.printer_detail, "printer detail")?;
         let normalized = (
             "DIAGNOSTICS_CAPTURE:v1",
             request.context.tenant_id.to_string(),
@@ -133,6 +135,8 @@ impl Store {
             &hub_mode,
             &whatsapp_status,
             &ocr_status,
+            &printer_state,
+            &printer_detail,
         );
         let request_sha256 = sha256_hex(&serde_json::to_vec(&normalized)?);
         const ACTION: &str = "DIAGNOSTICS_CAPTURE";
@@ -154,6 +158,8 @@ impl Store {
             "hub_mode": hub_mode,
             "whatsapp_status": whatsapp_status,
             "ocr_status": ocr_status,
+            "printer_state": printer_state,
+            "printer_detail": printer_detail,
             "operational": operational,
         }))?;
         let payload_sha256 = sha256_hex(payload_json.as_bytes());

@@ -828,6 +828,8 @@ fn diagnostic_capture_is_permissioned_payload_bound_immutable_and_redacted() {
         hub_mode: "LOCAL_ONLY".into(),
         whatsapp_status: "DISABLED".into(),
         ocr_status: "DISABLED".into(),
+        printer_state: "REACHABLE".into(),
+        printer_detail: "Windows spooler printer handle opened successfully".into(),
         now,
     };
 

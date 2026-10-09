@@ -100,6 +100,8 @@ struct DesktopDiagnostics {
     hub_mode: &'static str,
     whatsapp_status: &'static str,
     ocr_status: &'static str,
+    printer_state: &'static str,
+    printer_detail: String,
 }
 
 #[derive(Deserialize)]
@@ -943,12 +945,24 @@ fn restore_verified_backup(
 #[tauri::command]
 fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiagnostics, String> {
     let session = require_session(&state)?;
-    let operational = state
-        .store
-        .lock()
-        .map_err(|_| "database state poisoned".to_string())?
-        .operational_diagnostics(session.terminal, session.user_id)
-        .map_err(command_error)?;
+    let (operational, profile) = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "database state poisoned".to_string())?;
+        let operational = store
+            .operational_diagnostics(session.terminal, session.user_id)
+            .map_err(command_error)?;
+        let profile = store.default_printer_profile(session.terminal).ok();
+        (operational, profile)
+    };
+    let printer_probe = profile.map_or_else(
+        || printer::PrinterProbe {
+            state: "MISCONFIGURED",
+            detail: "No active default printer profile".into(),
+        },
+        |profile| printer::probe(&profile.transport, profile.target.as_deref()),
+    );
     Ok(DesktopDiagnostics {
         operational,
         application_version: env!("CARGO_PKG_VERSION"),
@@ -958,6 +972,8 @@ fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiag
         hub_mode: "LOCAL_ONLY",
         whatsapp_status: "DISABLED",
         ocr_status: "DISABLED",
+        printer_state: printer_probe.state,
+        printer_detail: printer_probe.detail,
     })
 }
 
@@ -980,6 +996,19 @@ fn capture_redacted_diagnostics(
     request: CaptureDiagnosticsRequest,
 ) -> Result<DiagnosticExportReceipt, String> {
     let session = require_session(&state)?;
+    let printer_probe = {
+        let store = state
+            .store
+            .lock()
+            .map_err(|_| "database state poisoned".to_string())?;
+        store.default_printer_profile(session.terminal).map_or_else(
+            |_| printer::PrinterProbe {
+                state: "MISCONFIGURED",
+                detail: "No active default printer profile".into(),
+            },
+            |profile| printer::probe(&profile.transport, profile.target.as_deref()),
+        )
+    };
     let snapshot = state
         .store
         .lock()
@@ -993,6 +1022,8 @@ fn capture_redacted_diagnostics(
             hub_mode: "LOCAL_ONLY".into(),
             whatsapp_status: "DISABLED".into(),
             ocr_status: "DISABLED".into(),
+            printer_state: printer_probe.state.into(),
+            printer_detail: printer_probe.detail,
             now: Utc::now(),
         })
         .map_err(command_error)?;

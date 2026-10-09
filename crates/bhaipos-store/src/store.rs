@@ -462,6 +462,8 @@ pub struct DiagnosticCaptureRequest {
     pub hub_mode: String,
     pub whatsapp_status: String,
     pub ocr_status: String,
+    pub printer_state: String,
+    pub printer_detail: String,
     pub now: DateTime<Utc>,
 }
 
