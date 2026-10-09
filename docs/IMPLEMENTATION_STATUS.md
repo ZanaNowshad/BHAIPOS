@@ -53,6 +53,8 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `37998456402` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for durable redacted diagnostic exports and immutable snapshot history.
+- Diagnostic captures require explicit export authority, bind retries to the normalized trusted request, preserve scoped immutable payload/hash evidence, refuse changed-payload replay, and export atomically only to an application-controlled directory. Renderer requests cannot supply authority or output paths.
 - GitHub Actions run `37380047293` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for trusted operational diagnostics and backup administration.
 - The permission-scoped diagnostics service performs live SQLite quick/foreign-key checks and returns only tenant/branch/device/register-scoped health, sync/job/print and backup evidence. The owner UI supports manual backup dispatch, schedule configuration, verified restore preview and explicit typed restore confirmation without renderer-provided authority or filesystem paths.
 - GitHub Actions run `37377389533` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for safe scheduled-backup retention.

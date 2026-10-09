@@ -2,7 +2,7 @@
 
 Assessment date: 2026-10-09
 Authority baseline: public `main` commit `0480e2d23817a9e565498de50698b9c075b468e4`
-Working tree: durable redacted diagnostic export/history implementation pending CI
+Working tree: durable redacted diagnostic export/history implementation verified by CI run `37998456402`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -58,7 +58,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 39 | Imports and exports | NOT STARTED | No executable wizard | CSV/XLSX mapping, conservative match, audit and formula-injection handling required |
 | 40 | Backup, restore and DB health | IN PROGRESS | `0020`–`0023`; SQLite online backup; SHA-256 and integrity/foreign-key checks; compatibility preview; owner-only restore with safety backup and staged evidence; durable manual/scheduled dispatch; path-confined replay-safe retention; permission-scoped owner UI for manual backup, schedule, live health, restore preview and typed confirmation; GitHub Actions runs `37308423966`, `37377389533` and `37380047293` pass all jobs | Encryption/key custody, external-backup import policy and clean-Windows crash/corruption acceptance remain |
 | 41 | Background jobs | IN PROGRESS | `0019_background_jobs.sql`; payload-bound enqueue; replay-safe claim/heartbeat/progress/finish/recovery operations; opaque leases; bounded monotonic progress; cancellation; retry backoff; immutable events; trusted RBAC/scope/audit boundary; concrete backup handler plus schedule-authorized unattended claims; GitHub Actions runs `37240547597`, `37258354228`, `37261516269` and `37308423966` pass all jobs | Concrete handlers for restore, import/export, OCR, AI, sync and analytics and Windows interruption exercise remain |
-| 42 | Diagnostics | IN PROGRESS | `0023_diagnostics.sql`, `0024_diagnostic_exports.sql`; explicit view/export permissions; live SQLite quick/foreign-key checks; scoped typed service; immutable payload-bound snapshots; application-controlled atomic redacted JSON export; snapshot-history UI; live-view CI run `37380047293`; export/history Rust CI pending | Live printer probe and Windows runtime exercise remain |
+| 42 | Diagnostics | IN PROGRESS | `0023_diagnostics.sql`, `0024_diagnostic_exports.sql`; explicit view/export permissions; live SQLite quick/foreign-key checks; scoped typed service; immutable payload-bound snapshots; application-controlled atomic redacted JSON export; snapshot-history UI; CI runs `37380047293` and `37998456402` pass all jobs | Live printer probe and Windows runtime exercise remain |
 | 43 | Update and release security | NOT STARTED | Tauri packaging shell and CI core checks only | Signed updater, Authenticode, manifest, SBOM and provenance required |
 | 44 | Tauri trust boundary | IMPLEMENTED — UNVERIFIED | Minimal capabilities/CSP; explicit typed command allow-list; renderer DTOs omit authority; no shell/raw DB/filesystem command | Cargo/runtime verification and future sidecar IPC review required |
 | 45 | Feature flags | NOT STARTED | Feature-flag schema only | Runtime gating and disabled-module tests required |
