@@ -6,8 +6,8 @@ use bhaipos_core::{
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
-    CloseCashSessionRequest, DiagnosticCaptureRequest, LocalBootstrapRequest, NewProduct,
-    OfflineActionRuleInput, OfflinePolicyDecision, ConfigureOfflinePolicyRequest, PaymentInput,
+    CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
+    LocalBootstrapRequest, NewProduct, OfflineActionRuleInput, OfflinePolicyDecision, PaymentInput,
     RefundLineInput, RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
@@ -972,12 +972,22 @@ fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
 
     let login = f
         .store
-        .offline_authorization(context, f.user, "LOGIN", now + chrono::Duration::minutes(60))
+        .offline_authorization(
+            context,
+            f.user,
+            "LOGIN",
+            now + chrono::Duration::minutes(60),
+        )
         .unwrap();
     assert_eq!(login.decision, OfflinePolicyDecision::Allow);
     let stale_refund = f
         .store
-        .offline_authorization(context, f.user, "REFUND", now + chrono::Duration::minutes(121))
+        .offline_authorization(
+            context,
+            f.user,
+            "REFUND",
+            now + chrono::Duration::minutes(121),
+        )
         .unwrap();
     assert_eq!(stale_refund.decision, OfflinePolicyDecision::Deny);
     assert!(stale_refund.reason.contains("stale"));

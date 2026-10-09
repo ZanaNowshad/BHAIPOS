@@ -169,13 +169,36 @@ impl Store {
                 })
             }
         };
-        type PolicyRow = (String, i64, String, String, i64, String, String, String, String, i64);
+        type PolicyRow = (
+            String,
+            i64,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            i64,
+        );
         let row: Option<PolicyRow> = self.conn.query_row(
             "SELECT p.id,p.version,p.valid_from,p.valid_until,p.max_policy_staleness_minutes,d.state,d.synchronized_at,d.valid_until,r.decision,r.max_offline_age_minutes FROM offline_policy_versions p JOIN device_offline_policy_state d ON d.policy_id=p.id AND d.tenant_id=p.tenant_id AND d.branch_id=p.branch_id JOIN offline_policy_rules r ON r.policy_id=p.id AND r.tenant_id=p.tenant_id WHERE p.tenant_id=?1 AND p.branch_id=?2 AND p.state='ACTIVE' AND d.device_id=?3 AND r.action_type=?4",
             params![context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),action],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?)),
         ).optional()?;
-        let Some((policy_id, version, valid_from, policy_valid_until, max_staleness, device_state, synchronized_at, device_valid_until, decision, action_max_age)) = row else {
+        let Some((
+            policy_id,
+            version,
+            valid_from,
+            policy_valid_until,
+            max_staleness,
+            device_state,
+            synchronized_at,
+            device_valid_until,
+            decision,
+            action_max_age,
+        )) = row
+        else {
             return Ok(OfflineAuthorizationResult {
                 policy_id: None,
                 policy_version: None,
