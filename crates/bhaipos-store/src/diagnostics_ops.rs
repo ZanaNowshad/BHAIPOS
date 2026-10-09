@@ -119,8 +119,7 @@ impl Store {
             .map(|value| Self::diagnostic_label(value, "build SHA"))
             .transpose()?;
         let hub_mode = Self::diagnostic_label(&request.hub_mode, "hub mode")?;
-        let whatsapp_status =
-            Self::diagnostic_label(&request.whatsapp_status, "WhatsApp status")?;
+        let whatsapp_status = Self::diagnostic_label(&request.whatsapp_status, "WhatsApp status")?;
         let ocr_status = Self::diagnostic_label(&request.ocr_status, "OCR status")?;
         let normalized = (
             "DIAGNOSTICS_CAPTURE:v1",
@@ -258,8 +257,7 @@ impl Store {
             |row| {
                 let id: String = row.get(0)?;
                 Ok(DiagnosticSnapshotSummary {
-                    snapshot_id: Uuid::parse_str(&id)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    snapshot_id: Uuid::parse_str(&id).map_err(|_| rusqlite::Error::InvalidQuery)?,
                     payload_sha256: row.get(1)?,
                     created_at: row.get(2)?,
                     app_version: row.get(3)?,
@@ -268,12 +266,15 @@ impl Store {
                 })
             },
         )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
     }
 
     fn diagnostic_label(value: &str, field: &str) -> Result<String, StoreError> {
         let normalized = value.trim();
-        if normalized.is_empty() || normalized.len() > 128 || normalized.chars().any(char::is_control)
+        if normalized.is_empty()
+            || normalized.len() > 128
+            || normalized.chars().any(char::is_control)
         {
             return Err(StoreError::Validation(format!("invalid {field}")));
         }

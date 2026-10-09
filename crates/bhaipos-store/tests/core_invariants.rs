@@ -838,7 +838,9 @@ fn diagnostic_capture_is_permissioned_payload_bound_immutable_and_redacted() {
     ));
 
     let role = Uuid::new_v4();
-    f.store.create_role(role, f.tenant, "diagnostic-exporter").unwrap();
+    f.store
+        .create_role(role, f.tenant, "diagnostic-exporter")
+        .unwrap();
     for permission in ["diagnostics.view", "diagnostics.export"] {
         f.store.define_permission(permission, permission).unwrap();
         f.store.grant_permission(role, permission).unwrap();
@@ -848,7 +850,10 @@ fn diagnostic_capture_is_permissioned_payload_bound_immutable_and_redacted() {
     let first = f.store.capture_diagnostic_snapshot(request()).unwrap();
     let replay = f.store.capture_diagnostic_snapshot(request()).unwrap();
     assert_eq!(first, replay);
-    assert_eq!(first.payload_sha256, sha256_hex(first.payload_json.as_bytes()));
+    assert_eq!(
+        first.payload_sha256,
+        sha256_hex(first.payload_json.as_bytes())
+    );
     let payload = first.payload_json.to_ascii_lowercase();
     for forbidden in [
         "database_path",

@@ -18,9 +18,9 @@ use bhaipos_store::{
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
     LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
     OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics, PaymentInput,
-    RefundLineInput, RefundQuote,
-    RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
-    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
+    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
+    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
+    RestoreResult, Store,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -1074,22 +1074,31 @@ mod diagnostic_export_tests {
 
     #[test]
     fn diagnostic_export_recovers_interrupted_staging_and_replays_safely() {
-        let directory = std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let value = snapshot(Uuid::new_v4(), r#"{"redacted":true}"#);
         let file_name = format!("bhaipos-diagnostics-{}.json", value.snapshot_id);
-        std::fs::write(directory.join(format!(".{file_name}.partial")), b"interrupted").unwrap();
+        std::fs::write(
+            directory.join(format!(".{file_name}.partial")),
+            b"interrupted",
+        )
+        .unwrap();
 
         let first = write_diagnostic_export(&directory, &value).unwrap();
         let replay = write_diagnostic_export(&directory, &value).unwrap();
         assert_eq!(first.file_name, replay.file_name);
-        assert_eq!(std::fs::read_to_string(directory.join(file_name)).unwrap(), value.payload_json);
+        assert_eq!(
+            std::fs::read_to_string(directory.join(file_name)).unwrap(),
+            value.payload_json
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn diagnostic_export_refuses_to_overwrite_different_evidence() {
-        let directory = std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let value = snapshot(Uuid::new_v4(), r#"{"redacted":true}"#);
         let target = directory.join(format!("bhaipos-diagnostics-{}.json", value.snapshot_id));
