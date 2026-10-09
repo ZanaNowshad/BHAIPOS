@@ -25,6 +25,7 @@ UPGRADE_0020=ROOT/'migrations/0020_backup_restore.sql'
 UPGRADE_0021=ROOT/'migrations/0021_backup_scheduling.sql'
 UPGRADE_0022=ROOT/'migrations/0022_backup_retention.sql'
 UPGRADE_0023=ROOT/'migrations/0023_diagnostics.sql'
+UPGRADE_0024=ROOT/'migrations/0024_diagnostic_exports.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -98,6 +99,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0021.read_text())
         con.executescript(UPGRADE_0022.read_text())
         con.executescript(UPGRADE_0023.read_text())
+        con.executescript(UPGRADE_0024.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -111,6 +113,8 @@ con.execute("insert into tenants(id,name,created_at) values(?,?,?)",(upgrade_ten
 con.execute("insert into roles(id,tenant_id,name) values(?,?,?)",(upgrade_role,upgrade_tenant,'owner'))
 con.executescript(UPGRADE_0008.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='receipt.reprint'",(upgrade_role,)).fetchone()
+con.executescript(UPGRADE_0024.read_text())
+assert con.execute("select 1 from role_permissions where role_id=? and permission_code='diagnostics.export'",(upgrade_role,)).fetchone()
 
 # The additive binding migration must preserve historical unbound results.
 # Runtime replay of these rows fails closed because their request payload is
@@ -353,6 +357,7 @@ required_commands={
     'list_operational_alerts','transition_operational_alert',
     'create_verified_backup','preview_verified_restore','restore_verified_backup',
     'configure_backup_schedule','get_operational_diagnostics',
+    'list_diagnostic_snapshots','capture_redacted_diagnostics',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -361,7 +366,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0023_diagnostics"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0024_diagnostic_exports"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -434,17 +439,17 @@ for trigger in ['immutable_backup_schedule_events_update','immutable_backup_sche
 for trigger in ['immutable_scheduled_backup_outputs_update','immutable_backup_retention_operation_results_update','immutable_backup_retention_run_identity','guard_backup_retention_run_update','guard_backup_retention_item_update','guard_scheduled_backup_output_scope','guard_backup_retention_run_scope','guard_backup_retention_item_scope']:
     assert trigger in triggers, trigger
 diagnostics_ops=(ROOT/'crates/bhaipos-store/src/diagnostics_ops.rs').read_text()
-for symbol in ['operational_diagnostics','diagnostics.view','pragma_foreign_key_check','pending_background_jobs']:
+for symbol in ['operational_diagnostics','capture_diagnostic_snapshot','list_diagnostic_snapshots','diagnostics.view','diagnostics.export','pragma_foreign_key_check','pending_background_jobs']:
     assert symbol in diagnostics_ops, symbol
-for trigger in ['guard_diagnostics_snapshot_scope','immutable_diagnostics_snapshots_update','immutable_diagnostics_snapshots_delete']:
+for trigger in ['guard_diagnostics_snapshot_scope','immutable_diagnostics_snapshots_update','immutable_diagnostics_snapshots_delete','guard_diagnostic_snapshot_operation_scope','immutable_diagnostic_snapshot_operations_update','immutable_diagnostic_snapshot_operations_delete']:
     assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
 admin_api=(ROOT/'apps/desktop/src/api/admin.ts').read_text()
-for command in ['create_verified_backup','configure_backup_schedule','preview_verified_restore','restore_verified_backup','get_operational_diagnostics']:
+for command in ['create_verified_backup','configure_backup_schedule','preview_verified_restore','restore_verified_backup','get_operational_diagnostics','list_diagnostic_snapshots','capture_redacted_diagnostics']:
     assert f"'{command}'" in admin_api, command
-for forbidden in ['destinationDirectory','safetyBackupDirectory','storagePath']:
+for forbidden in ['destinationDirectory','safetyBackupDirectory','storagePath','diagnosticDirectory','outputPath']:
     assert forbidden not in admin_api, forbidden
 
 result={

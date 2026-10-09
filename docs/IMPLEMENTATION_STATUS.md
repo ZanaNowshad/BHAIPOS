@@ -14,9 +14,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-three SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 171 application tables created.
-- 259 integrity/security triggers created.
+- All twenty-four SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 172 application tables created.
+- 262 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -49,6 +49,7 @@ Status vocabulary:
 - Backup-schedule migration reapplication, payload-bound configuration/ticks, bounded authorization expiry, atomic due-job enqueue and immutable schedule evidence guards pass.
 - Backup-retention migration reapplication, append-only schedule/output evidence, legal run/item transitions, tenant/device scope guards and payload-bound result replay pass.
 - Diagnostics migration reapplication, explicit view permission, immutable scoped snapshot guards and redacted typed command-surface checks pass.
+- Diagnostic export migration reapplication, explicit export permission, immutable operation evidence, tenant/device scope, path-free renderer contract and atomic trusted-directory export boundary checks pass.
 
 **CI VERIFIED**
 

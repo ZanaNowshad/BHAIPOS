@@ -61,7 +61,8 @@ const MIGRATION_0020: &str = include_str!("../../../migrations/0020_backup_resto
 const MIGRATION_0021: &str = include_str!("../../../migrations/0021_backup_scheduling.sql");
 const MIGRATION_0022: &str = include_str!("../../../migrations/0022_backup_retention.sql");
 const MIGRATION_0023: &str = include_str!("../../../migrations/0023_diagnostics.sql");
-pub const LATEST_SCHEMA: &str = "0023_diagnostics";
+const MIGRATION_0024: &str = include_str!("../../../migrations/0024_diagnostic_exports.sql");
+pub const LATEST_SCHEMA: &str = "0024_diagnostic_exports";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -449,6 +450,40 @@ pub struct OperationalDiagnostics {
     pub printer_configured: bool,
     pub latest_backup: Option<DiagnosticBackupSummary>,
     pub backup_schedule: Option<DiagnosticBackupScheduleSummary>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiagnosticCaptureRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub app_version: String,
+    pub build_sha: Option<String>,
+    pub hub_mode: String,
+    pub whatsapp_status: String,
+    pub ocr_status: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticSnapshotResult {
+    pub snapshot_id: Uuid,
+    pub payload_sha256: String,
+    pub created_at: String,
+    pub app_version: String,
+    pub build_sha: Option<String>,
+    pub schema_version: String,
+    pub payload_json: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticSnapshotSummary {
+    pub snapshot_id: Uuid,
+    pub payload_sha256: String,
+    pub created_at: String,
+    pub app_version: String,
+    pub build_sha: Option<String>,
+    pub schema_version: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1050,6 +1085,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0021)?;
         self.conn.execute_batch(MIGRATION_0022)?;
         self.conn.execute_batch(MIGRATION_0023)?;
+        self.conn.execute_batch(MIGRATION_0024)?;
         Ok(())
     }
     fn ensure_column(
@@ -1227,6 +1263,10 @@ impl Store {
             ("backup.schedule", "Configure scheduled backups"),
             ("backup.retention", "Prune scheduled backups"),
             ("diagnostics.view", "View redacted operational diagnostics"),
+            (
+                "diagnostics.export",
+                "Capture and export redacted operational diagnostics",
+            ),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),
             ("cash.movement.paid_in", "Record paid in"),

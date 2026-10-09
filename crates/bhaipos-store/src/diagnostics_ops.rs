@@ -103,4 +103,180 @@ impl Store {
             backup_schedule,
         })
     }
+
+    pub fn capture_diagnostic_snapshot(
+        &mut self,
+        request: DiagnosticCaptureRequest,
+    ) -> Result<DiagnosticSnapshotResult, StoreError> {
+        self.validate_local_session(request.context, request.user_id)?;
+        if !self.user_has_permission(request.context, request.user_id, "diagnostics.export")? {
+            return Err(StoreError::Authorization("diagnostics.export"));
+        }
+        let app_version = Self::diagnostic_label(&request.app_version, "application version")?;
+        let build_sha = request
+            .build_sha
+            .as_deref()
+            .map(|value| Self::diagnostic_label(value, "build SHA"))
+            .transpose()?;
+        let hub_mode = Self::diagnostic_label(&request.hub_mode, "hub mode")?;
+        let whatsapp_status =
+            Self::diagnostic_label(&request.whatsapp_status, "WhatsApp status")?;
+        let ocr_status = Self::diagnostic_label(&request.ocr_status, "OCR status")?;
+        let normalized = (
+            "DIAGNOSTICS_CAPTURE:v1",
+            request.context.tenant_id.to_string(),
+            request.context.branch_id.to_string(),
+            request.context.device_id.to_string(),
+            request.context.register_id.to_string(),
+            request.user_id.to_string(),
+            &app_version,
+            &build_sha,
+            &hub_mode,
+            &whatsapp_status,
+            &ocr_status,
+        );
+        let request_sha256 = sha256_hex(&serde_json::to_vec(&normalized)?);
+        const ACTION: &str = "DIAGNOSTICS_CAPTURE";
+        if let Some(existing) = self.load_idempotent_result(
+            request.context.tenant_id,
+            request.operation_id,
+            ACTION,
+            &request_sha256,
+        )? {
+            return Ok(existing);
+        }
+
+        let operational = self.operational_diagnostics(request.context, request.user_id)?;
+        let payload_json = serde_json::to_string(&serde_json::json!({
+            "format_version": 1,
+            "captured_at": request.now.to_rfc3339(),
+            "application_version": app_version,
+            "build_sha": build_sha,
+            "hub_mode": hub_mode,
+            "whatsapp_status": whatsapp_status,
+            "ocr_status": ocr_status,
+            "operational": operational,
+        }))?;
+        let payload_sha256 = sha256_hex(payload_json.as_bytes());
+        let snapshot_id = Uuid::new_v4();
+        let result = DiagnosticSnapshotResult {
+            snapshot_id,
+            payload_sha256: payload_sha256.clone(),
+            created_at: request.now.to_rfc3339(),
+            app_version: app_version.clone(),
+            build_sha: build_sha.clone(),
+            schema_version: LATEST_SCHEMA.into(),
+            payload_json: payload_json.clone(),
+        };
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO diagnostics_snapshots(id,tenant_id,branch_id,device_id,app_version,build_sha,schema_version,payload_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                snapshot_id.to_string(),
+                request.context.tenant_id.to_string(),
+                request.context.branch_id.to_string(),
+                request.context.device_id.to_string(),
+                app_version,
+                build_sha,
+                LATEST_SCHEMA,
+                payload_json,
+                request.now.to_rfc3339(),
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO diagnostic_snapshot_operations(tenant_id,operation_id,action,request_sha256,snapshot_id,branch_id,device_id,user_id,payload_sha256,committed_at) VALUES(?1,?2,'CAPTURE_REDACTED_DIAGNOSTICS',?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                request.context.tenant_id.to_string(),
+                request.operation_id.to_string(),
+                request_sha256,
+                snapshot_id.to_string(),
+                request.context.branch_id.to_string(),
+                request.context.device_id.to_string(),
+                request.user_id.to_string(),
+                payload_sha256,
+                request.now.to_rfc3339(),
+            ],
+        )?;
+        Self::record_idempotent_result(
+            &tx,
+            request.context.tenant_id,
+            request.operation_id,
+            ACTION,
+            &request_sha256,
+            &result,
+            request.now,
+        )?;
+        Self::append_audit(
+            &tx,
+            request.context.tenant_id,
+            request.context.device_id,
+            request.user_id,
+            "DIAGNOSTICS_CAPTURED",
+            "diagnostics_snapshot",
+            &snapshot_id.to_string(),
+            &serde_json::to_string(&serde_json::json!({
+                "payload_sha256": result.payload_sha256,
+                "schema_version": result.schema_version,
+            }))?,
+            request.now,
+        )?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn list_diagnostic_snapshots(
+        &self,
+        context: LocalTerminalContext,
+        user: UserId,
+        limit: i64,
+    ) -> Result<Vec<DiagnosticSnapshotSummary>, StoreError> {
+        self.validate_local_session(context, user)?;
+        if !self.user_has_permission(context, user, "diagnostics.view")? {
+            return Err(StoreError::Authorization("diagnostics.view"));
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(StoreError::Validation(
+                "diagnostic snapshot history limit must be between 1 and 100".into(),
+            ));
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT s.id,o.payload_sha256,s.created_at,s.app_version,s.build_sha,s.schema_version
+             FROM diagnostics_snapshots s
+             JOIN diagnostic_snapshot_operations o ON o.snapshot_id=s.id AND o.tenant_id=s.tenant_id
+             WHERE s.tenant_id=?1 AND s.branch_id=?2 AND s.device_id=?3
+             ORDER BY s.created_at DESC,s.id DESC LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                context.tenant_id.to_string(),
+                context.branch_id.to_string(),
+                context.device_id.to_string(),
+                limit,
+            ],
+            |row| {
+                let id: String = row.get(0)?;
+                Ok(DiagnosticSnapshotSummary {
+                    snapshot_id: Uuid::parse_str(&id)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    payload_sha256: row.get(1)?,
+                    created_at: row.get(2)?,
+                    app_version: row.get(3)?,
+                    build_sha: row.get(4)?,
+                    schema_version: row.get(5)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+    }
+
+    fn diagnostic_label(value: &str, field: &str) -> Result<String, StoreError> {
+        let normalized = value.trim();
+        if normalized.is_empty() || normalized.len() > 128 || normalized.chars().any(char::is_control)
+        {
+            return Err(StoreError::Validation(format!("invalid {field}")));
+        }
+        Ok(normalized.to_owned())
+    }
 }

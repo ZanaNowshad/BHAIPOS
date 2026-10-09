@@ -69,8 +69,27 @@ export type OperationalDiagnostics = {
   ocr_status: string;
 };
 
+export type DiagnosticSnapshot = {
+  snapshot_id: string;
+  payload_sha256: string;
+  created_at: string;
+  app_version: string;
+  build_sha: string | null;
+  schema_version: string;
+};
+
+export type DiagnosticExportReceipt = {
+  snapshot_id: string;
+  file_name: string;
+  payload_sha256: string;
+  created_at: string;
+};
+
 export const adminApi = {
   diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
+  diagnosticSnapshots: () => invoke<DiagnosticSnapshot[]>('list_diagnostic_snapshots'),
+  captureDiagnostics: (operationId: string) =>
+    invoke<DiagnosticExportReceipt>('capture_redacted_diagnostics', { request: { operationId } }),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (

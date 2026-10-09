@@ -6,8 +6,9 @@ use bhaipos_core::{
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
-    CloseCashSessionRequest, LocalBootstrapRequest, NewProduct, PaymentInput, RefundLineInput,
-    RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
+    CloseCashSessionRequest, DiagnosticCaptureRequest, LocalBootstrapRequest, NewProduct,
+    PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest, Store, StoreError,
+    SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -805,6 +806,95 @@ fn diagnostics_are_permission_scoped_integrity_checked_and_redacted() {
     for forbidden in ["pin", "credential", "secret", "cookie", "token"] {
         assert!(!serialized.contains(forbidden), "leaked {forbidden}");
     }
+}
+
+#[test]
+fn diagnostic_capture_is_permissioned_payload_bound_immutable_and_redacted() {
+    let mut f = fixture();
+    let now = t("2026-10-09T18:00:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let operation_id = OperationId::new();
+    let request = || DiagnosticCaptureRequest {
+        context,
+        user_id: f.user,
+        operation_id,
+        app_version: "0.1.0".into(),
+        build_sha: Some("abc123".into()),
+        hub_mode: "LOCAL_ONLY".into(),
+        whatsapp_status: "DISABLED".into(),
+        ocr_status: "DISABLED".into(),
+        now,
+    };
+
+    let denied = f.store.capture_diagnostic_snapshot(request()).unwrap_err();
+    assert!(matches!(
+        denied,
+        StoreError::Authorization("diagnostics.export")
+    ));
+
+    let role = Uuid::new_v4();
+    f.store.create_role(role, f.tenant, "diagnostic-exporter").unwrap();
+    for permission in ["diagnostics.view", "diagnostics.export"] {
+        f.store.define_permission(permission, permission).unwrap();
+        f.store.grant_permission(role, permission).unwrap();
+    }
+    f.store.assign_role(f.user, role, Some(f.branch)).unwrap();
+
+    let first = f.store.capture_diagnostic_snapshot(request()).unwrap();
+    let replay = f.store.capture_diagnostic_snapshot(request()).unwrap();
+    assert_eq!(first, replay);
+    assert_eq!(first.payload_sha256, sha256_hex(first.payload_json.as_bytes()));
+    let payload = first.payload_json.to_ascii_lowercase();
+    for forbidden in [
+        "database_path",
+        "backup_directory",
+        "pin_hash",
+        "credential_hash",
+        "device_secret",
+        "session_cookie",
+        "api_key",
+    ] {
+        assert!(!payload.contains(forbidden), "leaked {forbidden}");
+    }
+
+    let changed = f
+        .store
+        .capture_diagnostic_snapshot(DiagnosticCaptureRequest {
+            app_version: "0.1.1".into(),
+            ..request()
+        })
+        .unwrap_err();
+    assert!(matches!(changed, StoreError::Conflict(_)));
+
+    let history = f
+        .store
+        .list_diagnostic_snapshots(context, f.user, 10)
+        .unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].snapshot_id, first.snapshot_id);
+    assert_eq!(history[0].payload_sha256, first.payload_sha256);
+
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "UPDATE diagnostics_snapshots SET app_version='tampered' WHERE id=?1",
+            params![first.snapshot_id.to_string()],
+        )
+        .is_err());
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "DELETE FROM diagnostic_snapshot_operations WHERE snapshot_id=?1",
+            params![first.snapshot_id.to_string()],
+        )
+        .is_err());
 }
 
 fn cart_with_one(f: &Fixture, now: DateTime<Utc>) -> CartId {
