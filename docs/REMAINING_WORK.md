@@ -38,7 +38,7 @@ This is the dependency-ordered backlog for taking BHAIPOS from its current state
 
 ## Step 2 — Finish foundational identity, authorization, and offline policy
 
-- [ ] Define versioned offline policy records and bounded offline authorization windows.
+- [x] Define versioned offline policy records and bounded offline authorization windows.
 - [ ] Enforce credential/policy expiry for disconnected login and protected actions.
 - [ ] Define offline allow/deny rules for refund, void, price override, credit, stock adjustment, supplier payment, and other high-risk actions.
 - [ ] Add reconciliation outcomes for actions accepted under stale policy.

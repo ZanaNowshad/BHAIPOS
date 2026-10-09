@@ -14,9 +14,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-four SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 172 application tables created.
-- 262 integrity/security triggers created.
+- All twenty-five SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 175 application tables created.
+- 271 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -51,6 +51,7 @@ Status vocabulary:
 - Diagnostics migration reapplication, explicit view permission, immutable scoped snapshot guards and redacted typed command-surface checks pass.
 - Diagnostic export migration reapplication, explicit export permission, immutable operation evidence, tenant/device scope, path-free renderer contract and atomic trusted-directory export boundary checks pass.
 - Diagnostics include a target-redacted live reachability probe for the configured Windows spooler or serial printer; non-Windows platforms explicitly report unsupported rather than fabricating readiness.
+- Versioned branch offline policies have bounded validity/staleness windows, device checkpoints, immutable action rules, explicit allow/manager/deny outcomes, fail-closed unknown actions, payload-bound activation and tamper-evident audit evidence.
 
 **CI VERIFIED**
 
