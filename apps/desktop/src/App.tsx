@@ -202,7 +202,7 @@ export function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0024</span></div>
+      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0025</span></div>
       <div className="status"><span className="dot"/>{notice}</div>
       <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}{canViewDiagnostics&&<button onClick={showDiagnostics}>Diagnostics</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
     </header>

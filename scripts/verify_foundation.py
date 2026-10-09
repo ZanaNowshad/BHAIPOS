@@ -26,6 +26,7 @@ UPGRADE_0021=ROOT/'migrations/0021_backup_scheduling.sql'
 UPGRADE_0022=ROOT/'migrations/0022_backup_retention.sql'
 UPGRADE_0023=ROOT/'migrations/0023_diagnostics.sql'
 UPGRADE_0024=ROOT/'migrations/0024_diagnostic_exports.sql'
+UPGRADE_0025=ROOT/'migrations/0025_offline_authorization_policy.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -100,6 +101,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0022.read_text())
         con.executescript(UPGRADE_0023.read_text())
         con.executescript(UPGRADE_0024.read_text())
+        con.executescript(UPGRADE_0025.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -115,6 +117,8 @@ con.executescript(UPGRADE_0008.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='receipt.reprint'",(upgrade_role,)).fetchone()
 con.executescript(UPGRADE_0024.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='diagnostics.export'",(upgrade_role,)).fetchone()
+con.executescript(UPGRADE_0025.read_text())
+assert con.execute("select 1 from role_permissions where role_id=? and permission_code='offline_policy.manage'",(upgrade_role,)).fetchone()
 
 # The additive binding migration must preserve historical unbound results.
 # Runtime replay of these rows fails closed because their request payload is
@@ -366,7 +370,7 @@ assert required_commands<=registered_commands, sorted(required_commands-register
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0024_diagnostic_exports"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0025_offline_authorization_policy"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
@@ -446,6 +450,11 @@ diagnostics_ops=(ROOT/'crates/bhaipos-store/src/diagnostics_ops.rs').read_text()
 for symbol in ['operational_diagnostics','capture_diagnostic_snapshot','list_diagnostic_snapshots','diagnostics.view','diagnostics.export','pragma_foreign_key_check','pending_background_jobs']:
     assert symbol in diagnostics_ops, symbol
 for trigger in ['guard_diagnostics_snapshot_scope','immutable_diagnostics_snapshots_update','immutable_diagnostics_snapshots_delete','guard_diagnostic_snapshot_operation_scope','immutable_diagnostic_snapshot_operations_update','immutable_diagnostic_snapshot_operations_delete']:
+    assert trigger in triggers, trigger
+offline_policy_ops=(ROOT/'crates/bhaipos-store/src/offline_policy_ops.rs').read_text()
+for symbol in ['configure_offline_policy','offline_authorization','OFFLINE_POLICY_CONFIGURE','unknown offline action fails closed','offline policy evidence is stale']:
+    assert symbol in offline_policy_ops, symbol
+for trigger in ['guard_offline_policy_scope','guard_offline_policy_retirement','immutable_offline_policy_delete','guard_offline_policy_rule_scope','immutable_offline_policy_rules_update','guard_device_offline_policy_state_insert','guard_device_offline_policy_state_update','immutable_device_offline_policy_state_delete']:
     assert trigger in triggers, trigger
 credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_text()
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge

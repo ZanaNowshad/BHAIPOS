@@ -29,6 +29,8 @@ mod diagnostics_ops;
 mod expense_ops;
 #[path = "job_ops.rs"]
 mod job_ops;
+#[path = "offline_policy_ops.rs"]
+mod offline_policy_ops;
 #[path = "procurement.rs"]
 mod procurement;
 #[path = "production.rs"]
@@ -62,7 +64,9 @@ const MIGRATION_0021: &str = include_str!("../../../migrations/0021_backup_sched
 const MIGRATION_0022: &str = include_str!("../../../migrations/0022_backup_retention.sql");
 const MIGRATION_0023: &str = include_str!("../../../migrations/0023_diagnostics.sql");
 const MIGRATION_0024: &str = include_str!("../../../migrations/0024_diagnostic_exports.sql");
-pub const LATEST_SCHEMA: &str = "0024_diagnostic_exports";
+const MIGRATION_0025: &str =
+    include_str!("../../../migrations/0025_offline_authorization_policy.sql");
+pub const LATEST_SCHEMA: &str = "0025_offline_authorization_policy";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -486,6 +490,63 @@ pub struct DiagnosticSnapshotSummary {
     pub app_version: String,
     pub build_sha: Option<String>,
     pub schema_version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OfflinePolicyDecision {
+    Allow,
+    RequireManagerApproval,
+    Deny,
+}
+
+impl OfflinePolicyDecision {
+    fn as_db(&self) -> &'static str {
+        match self {
+            Self::Allow => "ALLOW",
+            Self::RequireManagerApproval => "REQUIRE_MANAGER_APPROVAL",
+            Self::Deny => "DENY",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfflineActionRuleInput {
+    pub action_type: String,
+    pub decision: OfflinePolicyDecision,
+    pub max_offline_age_minutes: i64,
+    pub constraints_json: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfigureOfflinePolicyRequest {
+    pub context: LocalTerminalContext,
+    pub user_id: UserId,
+    pub operation_id: OperationId,
+    pub offline_login_window_minutes: i64,
+    pub max_policy_staleness_minutes: i64,
+    pub authorization_valid_days: i64,
+    pub rules: Vec<OfflineActionRuleInput>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfflinePolicyResult {
+    pub policy_id: Uuid,
+    pub version: i64,
+    pub state: String,
+    pub valid_until: String,
+    pub rule_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfflineAuthorizationResult {
+    pub policy_id: Option<Uuid>,
+    pub policy_version: Option<i64>,
+    pub action_type: String,
+    pub decision: OfflinePolicyDecision,
+    pub reason: String,
+    pub policy_valid_until: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1088,6 +1149,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0022)?;
         self.conn.execute_batch(MIGRATION_0023)?;
         self.conn.execute_batch(MIGRATION_0024)?;
+        self.conn.execute_batch(MIGRATION_0025)?;
         Ok(())
     }
     fn ensure_column(
@@ -1268,6 +1330,14 @@ impl Store {
             (
                 "diagnostics.export",
                 "Capture and export redacted operational diagnostics",
+            ),
+            (
+                "offline_policy.view",
+                "View bounded offline authorization policy",
+            ),
+            (
+                "offline_policy.manage",
+                "Configure bounded offline authorization policy",
             ),
             ("cash.session.open", "Open cash sessions"),
             ("cash.session.close", "Close cash sessions"),

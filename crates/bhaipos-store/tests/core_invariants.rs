@@ -6,9 +6,9 @@ use bhaipos_core::{
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
-    CloseCashSessionRequest, DiagnosticCaptureRequest, LocalBootstrapRequest, NewProduct,
-    PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest, Store, StoreError,
-    SyncDeliveryOutcome,
+    CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
+    LocalBootstrapRequest, NewProduct, OfflineActionRuleInput, OfflinePolicyDecision, PaymentInput,
+    RefundLineInput, RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -900,6 +900,143 @@ fn diagnostic_capture_is_permissioned_payload_bound_immutable_and_redacted() {
         .execute(
             "DELETE FROM diagnostic_snapshot_operations WHERE snapshot_id=?1",
             params![first.snapshot_id.to_string()],
+        )
+        .is_err());
+}
+
+#[test]
+fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
+    let mut f = fixture();
+    let now = t("2026-10-09T18:00:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let operation_id = OperationId::new();
+    let rules = || {
+        vec![
+            OfflineActionRuleInput {
+                action_type: "LOGIN".into(),
+                decision: OfflinePolicyDecision::Allow,
+                max_offline_age_minutes: 1_440,
+                constraints_json: "{}".into(),
+            },
+            OfflineActionRuleInput {
+                action_type: "REFUND".into(),
+                decision: OfflinePolicyDecision::RequireManagerApproval,
+                max_offline_age_minutes: 120,
+                constraints_json: r#"{"maximum_fils":50000}"#.into(),
+            },
+            OfflineActionRuleInput {
+                action_type: "SUPPLIER_PAYMENT".into(),
+                decision: OfflinePolicyDecision::Deny,
+                max_offline_age_minutes: 0,
+                constraints_json: "{}".into(),
+            },
+        ]
+    };
+    let request = || ConfigureOfflinePolicyRequest {
+        context,
+        user_id: f.user,
+        operation_id,
+        offline_login_window_minutes: 1_440,
+        max_policy_staleness_minutes: 1_440,
+        authorization_valid_days: 30,
+        rules: rules(),
+        now,
+    };
+
+    assert!(matches!(
+        f.store.configure_offline_policy(request()).unwrap_err(),
+        StoreError::Authorization("offline_policy.manage")
+    ));
+    let role = Uuid::new_v4();
+    f.store
+        .create_role(role, f.tenant, "offline-policy-manager")
+        .unwrap();
+    f.store
+        .define_permission("offline_policy.manage", "Manage offline policy")
+        .unwrap();
+    f.store
+        .grant_permission(role, "offline_policy.manage")
+        .unwrap();
+    f.store.assign_role(f.user, role, Some(f.branch)).unwrap();
+
+    let first = f.store.configure_offline_policy(request()).unwrap();
+    let replay = f.store.configure_offline_policy(request()).unwrap();
+    assert_eq!(first, replay);
+    assert_eq!(first.version, 1);
+    assert_eq!(first.rule_count, 3);
+
+    let login = f
+        .store
+        .offline_authorization(
+            context,
+            f.user,
+            "LOGIN",
+            now + chrono::Duration::minutes(60),
+        )
+        .unwrap();
+    assert_eq!(login.decision, OfflinePolicyDecision::Allow);
+    let stale_refund = f
+        .store
+        .offline_authorization(
+            context,
+            f.user,
+            "REFUND",
+            now + chrono::Duration::minutes(121),
+        )
+        .unwrap();
+    assert_eq!(stale_refund.decision, OfflinePolicyDecision::Deny);
+    assert!(stale_refund.reason.contains("stale"));
+    let unknown = f
+        .store
+        .offline_authorization(context, f.user, "FUTURE_UNKNOWN", now)
+        .unwrap();
+    assert_eq!(unknown.decision, OfflinePolicyDecision::Deny);
+
+    let changed = f
+        .store
+        .configure_offline_policy(ConfigureOfflinePolicyRequest {
+            authorization_valid_days: 31,
+            ..request()
+        })
+        .unwrap_err();
+    assert!(matches!(changed, StoreError::Conflict(_)));
+
+    let second = f
+        .store
+        .configure_offline_policy(ConfigureOfflinePolicyRequest {
+            operation_id: OperationId::new(),
+            rules: vec![OfflineActionRuleInput {
+                action_type: "LOGIN".into(),
+                decision: OfflinePolicyDecision::RequireManagerApproval,
+                max_offline_age_minutes: 60,
+                constraints_json: "{}".into(),
+            }],
+            now: now + chrono::Duration::hours(2),
+            ..request()
+        })
+        .unwrap();
+    assert_eq!(second.version, 2);
+    let first_state: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT state FROM offline_policy_versions WHERE id=?1",
+            params![first.policy_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(first_state, "RETIRED");
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "UPDATE offline_policy_rules SET decision='ALLOW' WHERE policy_id=?1",
+            params![first.policy_id.to_string()],
         )
         .is_err());
 }
