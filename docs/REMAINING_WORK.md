@@ -21,14 +21,14 @@ This is the dependency-ordered backlog for taking BHAIPOS from its current state
 
 ## Step 1 — Close the diagnostics and recovery gate
 
-- [ ] Add `diagnostics.export` permission, fail-closed role grants, and trusted command enforcement.
-- [ ] Add a durable diagnostic-snapshot operation with operation ID and canonical request digest.
-- [ ] Make identical replay return the original snapshot; reject changed-payload replay.
-- [ ] Store immutable, tenant/branch/device-scoped diagnostic snapshot history.
-- [ ] Produce a redacted export that excludes secrets, PIN material, device credentials, session cookies, provider keys, and sensitive filesystem paths.
-- [ ] Write exports atomically into an application-controlled directory; never accept a renderer-provided output path.
-- [ ] Add snapshot-history list/view UI and a trusted export action.
-- [ ] Add redaction, scope, immutable-history, idempotency, and interrupted-write tests.
+- [x] Add `diagnostics.export` permission, fail-closed role grants, and trusted command enforcement.
+- [x] Add a durable diagnostic-snapshot operation with operation ID and canonical request digest.
+- [x] Make identical replay return the original snapshot; reject changed-payload replay.
+- [x] Store immutable, tenant/branch/device-scoped diagnostic snapshot history.
+- [x] Produce a redacted export that excludes secrets, PIN material, device credentials, session cookies, provider keys, and sensitive filesystem paths.
+- [x] Write exports atomically into an application-controlled directory; never accept a renderer-provided output path.
+- [x] Add snapshot-history list/view UI and a trusted export action.
+- [x] Add redaction, scope, immutable-history, idempotency, and interrupted-write tests.
 - [ ] Add live printer probing without exposing device secrets.
 - [ ] Exercise backup cancellation, process interruption, corrupt input, low disk, locked database, and restart recovery on Windows.
 - [ ] Exercise restore preview, pre-restore safety backup, staged replacement, crash recovery, integrity verification, and replay on Windows.

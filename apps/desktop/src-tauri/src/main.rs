@@ -4,8 +4,8 @@ mod credential_store;
 mod printer;
 
 use bhaipos_core::{
-    render_esc_pos, CartId, CutMode, DrawerPulsePolicy, EscPosProfile, Money, OperationId,
-    QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
+    render_esc_pos, sha256_hex, CartId, CutMode, DrawerPulsePolicy, EscPosProfile, Money,
+    OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
@@ -14,14 +14,18 @@ use bhaipos_store::{
     CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
     CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
-    FailedPrintJob, HeldCartSummary, LocalBootstrapRequest as StoreBootstrapRequest,
-    LocalBootstrapResult, LocalTerminalContext, OperationalAlertResult, OperationalAlertSummary,
-    OperationalDiagnostics, PaymentInput, RefundLineInput, RefundQuote,
-    RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
-    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
+    DiagnosticCaptureRequest as StoreDiagnosticCaptureRequest, DiagnosticSnapshotResult,
+    DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
+    LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
+    OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics, PaymentInput,
+    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
+    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
+    RestoreResult, Store,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -41,6 +45,7 @@ struct AppState {
     last_backup_schedule_tick: Mutex<Option<DateTime<Utc>>>,
     database_path: PathBuf,
     backup_directory: PathBuf,
+    diagnostic_directory: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -81,6 +86,7 @@ struct LoginResponse {
     can_view_alerts: bool,
     can_manage_alerts: bool,
     can_view_diagnostics: bool,
+    can_export_diagnostics: bool,
 }
 
 #[derive(Serialize)]
@@ -94,6 +100,20 @@ struct DesktopDiagnostics {
     hub_mode: &'static str,
     whatsapp_status: &'static str,
     ocr_status: &'static str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureDiagnosticsRequest {
+    operation_id: String,
+}
+
+#[derive(Serialize)]
+struct DiagnosticExportReceipt {
+    snapshot_id: Uuid,
+    file_name: String,
+    payload_sha256: String,
+    created_at: String,
 }
 
 #[derive(Deserialize)]
@@ -393,6 +413,9 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_view_diagnostics = store
         .user_has_permission(terminal, user_id, "diagnostics.view")
         .map_err(command_error)?;
+    let can_export_diagnostics = store
+        .user_has_permission(terminal, user_id, "diagnostics.export")
+        .map_err(command_error)?;
     *state
         .session
         .lock()
@@ -407,6 +430,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         can_view_alerts,
         can_manage_alerts,
         can_view_diagnostics,
+        can_export_diagnostics,
     })
 }
 
@@ -937,6 +961,154 @@ fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiag
     })
 }
 
+#[tauri::command]
+fn list_diagnostic_snapshots(
+    state: State<'_, AppState>,
+) -> Result<Vec<DiagnosticSnapshotSummary>, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .list_diagnostic_snapshots(session.terminal, session.user_id, 50)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn capture_redacted_diagnostics(
+    state: State<'_, AppState>,
+    request: CaptureDiagnosticsRequest,
+) -> Result<DiagnosticExportReceipt, String> {
+    let session = require_session(&state)?;
+    let snapshot = state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .capture_diagnostic_snapshot(StoreDiagnosticCaptureRequest {
+            context: session.terminal,
+            user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            build_sha: option_env!("BHAIPOS_BUILD_SHA").map(str::to_owned),
+            hub_mode: "LOCAL_ONLY".into(),
+            whatsapp_status: "DISABLED".into(),
+            ocr_status: "DISABLED".into(),
+            now: Utc::now(),
+        })
+        .map_err(command_error)?;
+    write_diagnostic_export(&state.diagnostic_directory, &snapshot)
+}
+
+fn write_diagnostic_export(
+    directory: &std::path::Path,
+    snapshot: &DiagnosticSnapshotResult,
+) -> Result<DiagnosticExportReceipt, String> {
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("create diagnostic export directory: {error}"))?;
+    let trusted_directory = directory
+        .canonicalize()
+        .map_err(|error| format!("resolve diagnostic export directory: {error}"))?;
+    let file_name = format!("bhaipos-diagnostics-{}.json", snapshot.snapshot_id);
+    let target = trusted_directory.join(&file_name);
+    if let Ok(metadata) = std::fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("diagnostic export target is not a trusted regular file".into());
+        }
+        let existing = std::fs::read(&target)
+            .map_err(|error| format!("read existing diagnostic export: {error}"))?;
+        if sha256_hex(&existing) != snapshot.payload_sha256 {
+            return Err("diagnostic export target already exists with different content".into());
+        }
+        return Ok(DiagnosticExportReceipt {
+            snapshot_id: snapshot.snapshot_id,
+            file_name,
+            payload_sha256: snapshot.payload_sha256.clone(),
+            created_at: snapshot.created_at.clone(),
+        });
+    }
+    let partial = trusted_directory.join(format!(".{file_name}.partial"));
+    if let Ok(metadata) = std::fs::symlink_metadata(&partial) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("diagnostic export staging target is not a trusted regular file".into());
+        }
+        std::fs::remove_file(&partial)
+            .map_err(|error| format!("remove interrupted diagnostic export: {error}"))?;
+    }
+    let write_result = (|| -> Result<(), std::io::Error> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)?;
+        file.write_all(snapshot.payload_json.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&partial, &target)?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("write diagnostic export atomically: {error}"));
+    }
+    Ok(DiagnosticExportReceipt {
+        snapshot_id: snapshot.snapshot_id,
+        file_name,
+        payload_sha256: snapshot.payload_sha256.clone(),
+        created_at: snapshot.created_at.clone(),
+    })
+}
+
+#[cfg(test)]
+mod diagnostic_export_tests {
+    use super::*;
+
+    fn snapshot(id: Uuid, payload: &str) -> DiagnosticSnapshotResult {
+        DiagnosticSnapshotResult {
+            snapshot_id: id,
+            payload_sha256: sha256_hex(payload.as_bytes()),
+            created_at: "2026-10-09T18:00:00+00:00".into(),
+            app_version: "0.1.0".into(),
+            build_sha: Some("abc123".into()),
+            schema_version: "0024_diagnostic_exports".into(),
+            payload_json: payload.into(),
+        }
+    }
+
+    #[test]
+    fn diagnostic_export_recovers_interrupted_staging_and_replays_safely() {
+        let directory =
+            std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let value = snapshot(Uuid::new_v4(), r#"{"redacted":true}"#);
+        let file_name = format!("bhaipos-diagnostics-{}.json", value.snapshot_id);
+        std::fs::write(
+            directory.join(format!(".{file_name}.partial")),
+            b"interrupted",
+        )
+        .unwrap();
+
+        let first = write_diagnostic_export(&directory, &value).unwrap();
+        let replay = write_diagnostic_export(&directory, &value).unwrap();
+        assert_eq!(first.file_name, replay.file_name);
+        assert_eq!(
+            std::fs::read_to_string(directory.join(file_name)).unwrap(),
+            value.payload_json
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_export_refuses_to_overwrite_different_evidence() {
+        let directory =
+            std::env::temp_dir().join(format!("bhaipos-diagnostics-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let value = snapshot(Uuid::new_v4(), r#"{"redacted":true}"#);
+        let target = directory.join(format!("bhaipos-diagnostics-{}.json", value.snapshot_id));
+        std::fs::write(&target, b"different").unwrap();
+        assert!(write_diagnostic_export(&directory, &value).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"different");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
 fn print_worker_cycle(handle: &tauri::AppHandle) -> Result<(), String> {
     let state = handle.state::<AppState>();
     let terminal = state
@@ -1267,6 +1439,7 @@ fn main() {
                 last_backup_schedule_tick: Mutex::new(None),
                 database_path: db_path,
                 backup_directory: data_dir.join("backups"),
+                diagnostic_directory: data_dir.join("diagnostics"),
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
@@ -1313,6 +1486,8 @@ fn main() {
             preview_verified_restore,
             restore_verified_backup,
             get_operational_diagnostics,
+            list_diagnostic_snapshots,
+            capture_redacted_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("BHAIPOS desktop runtime failed");

@@ -14,9 +14,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-three SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 171 application tables created.
-- 259 integrity/security triggers created.
+- All twenty-four SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 172 application tables created.
+- 262 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -49,9 +49,12 @@ Status vocabulary:
 - Backup-schedule migration reapplication, payload-bound configuration/ticks, bounded authorization expiry, atomic due-job enqueue and immutable schedule evidence guards pass.
 - Backup-retention migration reapplication, append-only schedule/output evidence, legal run/item transitions, tenant/device scope guards and payload-bound result replay pass.
 - Diagnostics migration reapplication, explicit view permission, immutable scoped snapshot guards and redacted typed command-surface checks pass.
+- Diagnostic export migration reapplication, explicit export permission, immutable operation evidence, tenant/device scope, path-free renderer contract and atomic trusted-directory export boundary checks pass.
 
 **CI VERIFIED**
 
+- GitHub Actions run `37998456402` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for durable redacted diagnostic exports and immutable snapshot history.
+- Diagnostic captures require explicit export authority, bind retries to the normalized trusted request, preserve scoped immutable payload/hash evidence, refuse changed-payload replay, and export atomically only to an application-controlled directory. Renderer requests cannot supply authority or output paths.
 - GitHub Actions run `37380047293` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for trusted operational diagnostics and backup administration.
 - The permission-scoped diagnostics service performs live SQLite quick/foreign-key checks and returns only tenant/branch/device/register-scoped health, sync/job/print and backup evidence. The owner UI supports manual backup dispatch, schedule configuration, verified restore preview and explicit typed restore confirmation without renderer-provided authority or filesystem paths.
 - GitHub Actions run `37377389533` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for safe scheduled-backup retention.
