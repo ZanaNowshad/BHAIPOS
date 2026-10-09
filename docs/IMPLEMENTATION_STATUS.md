@@ -1,5 +1,8 @@
 # BHAIPOS Implementation Status
 
+The dependency-ordered checklist for all remaining production work is maintained in
+[`REMAINING_WORK.md`](REMAINING_WORK.md).
+
 Status vocabulary:
 
 - **LOCAL VERIFIED** — executed successfully in the generation environment.
