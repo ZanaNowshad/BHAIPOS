@@ -29,7 +29,7 @@ This is the dependency-ordered backlog for taking BHAIPOS from its current state
 - [x] Write exports atomically into an application-controlled directory; never accept a renderer-provided output path.
 - [x] Add snapshot-history list/view UI and a trusted export action.
 - [x] Add redaction, scope, immutable-history, idempotency, and interrupted-write tests.
-- [ ] Add live printer probing without exposing device secrets.
+- [x] Add live printer probing without exposing device secrets.
 - [ ] Exercise backup cancellation, process interruption, corrupt input, low disk, locked database, and restart recovery on Windows.
 - [ ] Exercise restore preview, pre-restore safety backup, staged replacement, crash recovery, integrity verification, and replay on Windows.
 - [ ] Keep production restore disabled until the Windows recovery evidence passes.

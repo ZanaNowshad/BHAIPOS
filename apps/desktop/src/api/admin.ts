@@ -67,6 +67,8 @@ export type OperationalDiagnostics = {
   hub_mode: string;
   whatsapp_status: string;
   ocr_status: string;
+  printer_state: string;
+  printer_detail: string;
 };
 
 export type DiagnosticSnapshot = {

@@ -397,6 +397,10 @@ assert "phase==='admin'" in cashier_ui and 'Alert Centre' in cashier_ui
 assert 'recover_stale_print_jobs' in rust_authoritative
 assert 'lease_token' in rust_authoritative and 'receipt_text' in rust_authoritative
 assert (ROOT/'apps/desktop/src-tauri/src/printer.rs').exists()
+printer_adapter=(ROOT/'apps/desktop/src-tauri/src/printer.rs').read_text()
+for symbol in ['pub fn probe','UNSUPPORTED_PLATFORM','OpenPrinterW','Serial printer port opened successfully']:
+    assert symbol in printer_adapter, symbol
+assert 'printer_state' in desktop_bridge and 'printer_detail' in desktop_bridge
 assert "claim_next_print_job" not in registered_commands and "complete_print_job" not in registered_commands
 assert 'print_worker_cycle' in desktop_bridge
 for symbol in ['claim_sync_batch','complete_sync_delivery','accept_hub_mutation','resolve_sync_conflict','SyncMutationEnvelope','issue_device_enrollment','activate_device_enrollment']:
