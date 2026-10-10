@@ -4,9 +4,8 @@ mod credential_store;
 mod printer;
 
 use bhaipos_core::{
-    render_esc_pos, sha256_hex, sign_approval, ApprovalBinding, CartId, CutMode,
-    DrawerPulsePolicy, EscPosProfile, Money, OperationId, QuantityMilli, ReceiptEncoding, SaleId,
-    TenderKind,
+    render_esc_pos, sha256_hex, sign_approval, ApprovalBinding, CartId, CutMode, DrawerPulsePolicy,
+    EscPosProfile, Money, OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
@@ -914,9 +913,9 @@ fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundRe
     };
     let approval_required = decision == OfflinePolicyDecision::RequireManagerApproval;
     let approval = if approval_required {
-        let credentials = request.manager_approval.ok_or_else(|| {
-            "manager approval is required for offline refund".to_string()
-        })?;
+        let credentials = request
+            .manager_approval
+            .ok_or_else(|| "manager approval is required for offline refund".to_string())?;
         Some(build_manager_approval(
             &store,
             session,
@@ -970,9 +969,9 @@ fn record_cash_movement(
     };
     let approval_required = decision == OfflinePolicyDecision::RequireManagerApproval;
     let approval = if approval_required {
-        let credentials = request.manager_approval.ok_or_else(|| {
-            "manager approval is required for offline cash event".to_string()
-        })?;
+        let credentials = request
+            .manager_approval
+            .ok_or_else(|| "manager approval is required for offline cash event".to_string())?;
         Some(build_manager_approval(
             &store,
             session,
@@ -980,8 +979,7 @@ fn record_cash_movement(
             operation_id,
             "cash.movement",
             cash_session_id.to_string(),
-            Store::cash_movement_approval_payload_sha256(&store_request)
-                .map_err(command_error)?,
+            Store::cash_movement_approval_payload_sha256(&store_request).map_err(command_error)?,
             now,
         )?)
     } else {

@@ -66,8 +66,7 @@ const MIGRATION_0023: &str = include_str!("../../../migrations/0023_diagnostics.
 const MIGRATION_0024: &str = include_str!("../../../migrations/0024_diagnostic_exports.sql");
 const MIGRATION_0025: &str =
     include_str!("../../../migrations/0025_offline_authorization_policy.sql");
-const MIGRATION_0026: &str =
-    include_str!("../../../migrations/0026_manager_approval_evidence.sql");
+const MIGRATION_0026: &str = include_str!("../../../migrations/0026_manager_approval_evidence.sql");
 pub const LATEST_SCHEMA: &str = "0026_manager_approval_evidence";
 
 #[derive(Debug, Error)]
@@ -2707,9 +2706,8 @@ impl Store {
             let secret = approval_secret.ok_or(StoreError::Authorization(
                 "manager approval credential is required",
             ))?;
-            let grant = approval.ok_or(StoreError::Authorization(
-                "manager approval is required",
-            ))?;
+            let grant =
+                approval.ok_or(StoreError::Authorization("manager approval is required"))?;
             Self::consume_manager_approval_tx(
                 &tx,
                 secret,
@@ -3090,9 +3088,8 @@ impl Store {
             let secret = approval_secret.ok_or(StoreError::Authorization(
                 "manager approval credential is required",
             ))?;
-            let grant = approval.ok_or(StoreError::Authorization(
-                "manager approval is required",
-            ))?;
+            let grant =
+                approval.ok_or(StoreError::Authorization("manager approval is required"))?;
             Self::consume_manager_approval_tx(
                 &tx,
                 secret,

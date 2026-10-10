@@ -8,8 +8,8 @@ use bhaipos_store::{
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
     CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
     LocalBootstrapRequest, ManagerApprovalGrant, NewProduct, OfflineActionRuleInput,
-    OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput, RefundRequest,
-    RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
+    OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput,
+    RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -2533,25 +2533,26 @@ fn refund_and_cash_manager_approvals_are_atomic_exact_and_replay_safe() {
     let approval_tenant = f.tenant;
     let approval_branch = f.branch;
     let approval_device = f.device;
-    let grant = |operation_id: OperationId, action: &str, entity_id: String, payload_sha256: String| {
-        let binding = ApprovalBinding {
-            tenant_id: approval_tenant,
-            branch_id: approval_branch,
-            approver_user_id: manager,
-            device_id: approval_device,
-            operation_id,
-            action: action.into(),
-            entity_id,
-            payload_sha256,
-            nonce: Uuid::new_v4().to_string(),
-            issued_at: now,
-            expires_at: now + chrono::Duration::minutes(2),
+    let grant =
+        |operation_id: OperationId, action: &str, entity_id: String, payload_sha256: String| {
+            let binding = ApprovalBinding {
+                tenant_id: approval_tenant,
+                branch_id: approval_branch,
+                approver_user_id: manager,
+                device_id: approval_device,
+                operation_id,
+                action: action.into(),
+                entity_id,
+                payload_sha256,
+                nonce: Uuid::new_v4().to_string(),
+                issued_at: now,
+                expires_at: now + chrono::Duration::minutes(2),
+            };
+            ManagerApprovalGrant {
+                signature_hex: sign_approval(secret, &binding),
+                binding,
+            }
         };
-        ManagerApprovalGrant {
-            signature_hex: sign_approval(secret, &binding),
-            binding,
-        }
-    };
 
     let cart = cart_with_one(&f, now);
     let sale = f
@@ -2624,12 +2625,7 @@ fn refund_and_cash_manager_approvals_are_atomic_exact_and_replay_safe() {
         .unwrap();
     let replay = f
         .store
-        .refund_authorized(
-            refund_request,
-            true,
-            Some(secret),
-            Some(&refund_grant),
-        )
+        .refund_authorized(refund_request, true, Some(secret), Some(&refund_grant))
         .unwrap();
     assert_eq!(refunded, replay);
 
@@ -2668,12 +2664,7 @@ fn refund_and_cash_manager_approvals_are_atomic_exact_and_replay_safe() {
         Store::cash_movement_approval_payload_sha256(&cash_request).unwrap(),
     );
     f.store
-        .record_cash_movement_authorized(
-            cash_request,
-            true,
-            Some(secret),
-            Some(&cash_grant),
-        )
+        .record_cash_movement_authorized(cash_request, true, Some(secret), Some(&cash_grant))
         .unwrap();
     let approval_count: i64 = f
         .store
