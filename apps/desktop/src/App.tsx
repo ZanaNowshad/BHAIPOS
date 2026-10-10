@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
-import { adminApi, type DiagnosticSnapshot, type OperationalDiagnostics, type RestorePreview } from './api/admin';
+import { adminApi, type ConfigureOfflinePolicy, type DiagnosticSnapshot, type OfflinePolicyDecision, type OfflinePolicyDetail, type OperationalDiagnostics, type RestorePreview } from './api/admin';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
 type Phase = 'loading'|'setup'|'login'|'cashier'|'admin'|'diagnostics';
@@ -23,7 +23,10 @@ export function App() {
   const [canManageAlerts,setCanManageAlerts]=useState(false);
   const [canViewDiagnostics,setCanViewDiagnostics]=useState(false);
   const [canExportDiagnostics,setCanExportDiagnostics]=useState(false);
+  const [canViewOfflinePolicy,setCanViewOfflinePolicy]=useState(false);
+  const [canManageOfflinePolicy,setCanManageOfflinePolicy]=useState(false);
   const [diagnostics,setDiagnostics]=useState<OperationalDiagnostics|null>(null);
+  const [offlinePolicy,setOfflinePolicy]=useState<OfflinePolicyDetail|null>(null);
   const [diagnosticSnapshots,setDiagnosticSnapshots]=useState<DiagnosticSnapshot[]>([]);
   const [restorePreview,setRestorePreview]=useState<RestorePreview|null>(null);
   const [alerts,setAlerts]=useState<OperationalAlert[]>([]);
@@ -49,13 +52,18 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
   }
 
   async function showDiagnostics(){
-    try{const [live,history]=await Promise.all([adminApi.diagnostics(),adminApi.diagnosticSnapshots()]);setDiagnostics(live);setDiagnosticSnapshots(history);setPhase('diagnostics');setNotice('Live redacted diagnostics loaded');}
+    try{const [live,history,policy]=await Promise.all([adminApi.diagnostics(),adminApi.diagnosticSnapshots(),canViewOfflinePolicy?adminApi.activeOfflinePolicy():Promise.resolve(null)]);setDiagnostics(live);setDiagnosticSnapshots(history);setOfflinePolicy(policy);setPhase('diagnostics');setNotice('Live redacted diagnostics loaded');}
+    catch(error){setNotice(message(error));}
+  }
+
+  async function configureOfflinePolicy(request:Omit<ConfigureOfflinePolicy,'operationId'>){
+    try{const result=await adminApi.configureOfflinePolicy({...request,operationId:crypto.randomUUID()});setOfflinePolicy(await adminApi.activeOfflinePolicy());setNotice(`Offline policy version ${result.version} activated for this branch and terminal`);}
     catch(error){setNotice(message(error));}
   }
 
@@ -191,13 +199,13 @@ export function App() {
     catch(error){setNotice(message(error));}
   }
 
-  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setAlerts([]);setDiagnostics(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
+  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setCanViewOfflinePolicy(false);setCanManageOfflinePolicy(false);setAlerts([]);setDiagnostics(null);setOfflinePolicy(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
 
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
   if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
-  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
+  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
 
   return <div className="app-shell">
@@ -233,9 +241,9 @@ export function App() {
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
 }
 
@@ -252,8 +260,9 @@ function AlertCentre({alerts,canManage,notice,onTransition,onRefresh,onCashier,o
   </div>;
 }
 
-function DiagnosticsCentre({diagnostics,snapshots,preview,notice,canViewAlerts,canExport,onAlerts,onRefresh,onCapture,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;notice:string;canViewAlerts:boolean;canExport:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
+function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,canViewAlerts,canExport,canViewOfflinePolicy,canManageOfflinePolicy,onAlerts,onRefresh,onCapture,onConfigureOfflinePolicy,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;offlinePolicy:OfflinePolicyDetail|null;notice:string;canViewAlerts:boolean;canExport:boolean;canViewOfflinePolicy:boolean;canManageOfflinePolicy:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onConfigureOfflinePolicy:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
   const healthy=diagnostics.database_integrity==='ok'&&diagnostics.foreign_key_violations===0;
+  const policyState=offlinePolicyEvidenceState(offlinePolicy);
   return <div className="admin-shell">
     <nav className="admin-nav"><h2>BHAIPOS</h2><button className="cashier-return" onClick={onCashier}>Return to Cashier</button>{canViewAlerts&&<button onClick={onAlerts}>Alert Centre</button>}<button className="active">Diagnostics</button><button onClick={onRefresh}>Refresh</button><button onClick={onLock}>Lock Terminal</button></nav>
     <main className="admin-main"><header><div><span className="eyebrow">Redacted trusted-terminal evidence</span><h1>Diagnostics & Backups</h1><p>{notice}</p></div><span className="badge">{healthy?'Database healthy':'Review required'}</span></header>
@@ -261,9 +270,48 @@ function DiagnosticsCentre({diagnostics,snapshots,preview,notice,canViewAlerts,c
       <section className="admin-panels"><article><h2>Database</h2><dl className="diagnostic-list"><dt>Integrity</dt><dd>{diagnostics.database_integrity}</dd><dt>Foreign-key violations</dt><dd>{diagnostics.foreign_key_violations}</dd><dt>Path</dt><dd>{diagnostics.database_path}</dd><dt>Build</dt><dd>{diagnostics.build_sha??'development build'}</dd><dt>Application</dt><dd>{diagnostics.application_version}</dd></dl></article><article><h2>Terminal</h2><dl className="diagnostic-list"><dt>Device ID</dt><dd>{diagnostics.device_id}</dd><dt>Register ID</dt><dd>{diagnostics.register_id}</dd><dt>Last heartbeat</dt><dd>{diagnostics.last_heartbeat_at??'not reported'}</dd><dt>Printer profile</dt><dd>{diagnostics.printer_configured?'configured':'missing'}</dd><dt>Printer probe</dt><dd>{diagnostics.printer_state} · {diagnostics.printer_detail}</dd><dt>Failed prints</dt><dd>{diagnostics.failed_print_jobs}</dd><dt>Hub mode</dt><dd>{diagnostics.hub_mode}</dd></dl></article></section>
       <section className="admin-panels"><article><h2>Backup authority</h2><p>{diagnostics.backup_schedule?`${diagnostics.backup_schedule.state} · next ${diagnostics.backup_schedule.next_run_at} · retain ${diagnostics.backup_schedule.retention_count}`:'No scheduled backup configured'}</p><div className="admin-actions"><button className="primary" onClick={onBackup}>Create verified backup</button><button onClick={onSchedule}>Configure schedule</button></div><small>Trusted directory: {diagnostics.backup_directory}</small></article><article><h2>Latest verified evidence</h2>{diagnostics.latest_backup?<><p>{diagnostics.latest_backup.backup_type} · {diagnostics.latest_backup.state} · {diagnostics.latest_backup.integrity_state??'unknown integrity'}</p><small>{diagnostics.latest_backup.created_at} · {diagnostics.latest_backup.backup_id}</small><div className="admin-actions"><button onClick={onPreview}>Verify restore preview</button>{preview?.compatible&&<button className="danger" onClick={onRestore}>Restore after safety backup</button>}</div>{preview&&<p>SHA-256 {preview.sha256} · {preview.byte_size} bytes · schema {preview.schema_version}</p>}</>:<p>No backup evidence exists yet.</p>}</article></section>
       <section className="admin-panels"><article><h2>Synchronization</h2><dl className="diagnostic-list"><dt>Pending mutations</dt><dd>{diagnostics.pending_sync_mutations}</dd><dt>Requires review</dt><dd>{diagnostics.sync_requires_review}</dd><dt>Last checkpoint</dt><dd>{diagnostics.last_sync_at??'never'}</dd></dl></article><article><h2>Optional modules</h2><dl className="diagnostic-list"><dt>WhatsApp</dt><dd>{diagnostics.whatsapp_status}</dd><dt>OCR</dt><dd>{diagnostics.ocr_status}</dd><dt>Jobs requiring review</dt><dd>{diagnostics.background_jobs_requires_review}</dd></dl></article></section>
+      {canViewOfflinePolicy&&<section className="policy-section"><article><div className="policy-heading"><div><span className="eyebrow">Bounded disconnected authority</span><h2>Offline policy</h2></div><span className={`badge policy-${policyState.toLowerCase()}`}>{policyState}</span></div>{offlinePolicy?<><dl className="diagnostic-list"><dt>Immutable version</dt><dd>{offlinePolicy.version}</dd><dt>Branch policy state</dt><dd>{offlinePolicy.state}</dd><dt>Device checkpoint</dt><dd>{offlinePolicy.device_state??'MISSING'}</dd><dt>Synchronized</dt><dd>{offlinePolicy.synchronized_at?new Date(offlinePolicy.synchronized_at).toLocaleString():'never'}</dd><dt>Policy expires</dt><dd>{new Date(offlinePolicy.valid_until).toLocaleString()}</dd><dt>Device authorization expires</dt><dd>{offlinePolicy.device_valid_until?new Date(offlinePolicy.device_valid_until).toLocaleString():'not authorized'}</dd></dl><div className="policy-rules">{offlinePolicy.rules.map(rule=><div key={rule.action_type}><b>{rule.action_type.replaceAll('_',' ')}</b><span>{rule.decision.replaceAll('_',' ')}</span><small>{rule.max_offline_age_minutes===0?'No offline age allowed':`${rule.max_offline_age_minutes} minute maximum age`}</small></div>)}</div></>:<p>No active offline policy exists for this branch. Offline authorization evaluation fails closed until an authorized administrator activates one.</p>}</article>{canManageOfflinePolicy&&<OfflinePolicyEditor policy={offlinePolicy} onConfigure={onConfigureOfflinePolicy}/>}</section>}
       <section className="admin-panels"><article><h2>Redacted diagnostic evidence</h2><p>Exports contain scoped operational evidence without database paths, backup paths, PINs, credentials, cookies, or provider secrets.</p>{canExport?<button className="primary" onClick={onCapture}>Capture and export diagnostics</button>:<small>Export permission is not assigned.</small>}</article><article><h2>Immutable snapshot history</h2>{snapshots.length===0?<p>No diagnostic snapshots captured.</p>:<div className="snapshot-list">{snapshots.map(snapshot=><div key={snapshot.snapshot_id}><b>{new Date(snapshot.created_at).toLocaleString()}</b><small>{snapshot.app_version} · schema {snapshot.schema_version} · SHA-256 {snapshot.payload_sha256}</small></div>)}</div>}</article></section>
     </main>
   </div>;
+}
+
+const OFFLINE_ACTIONS: Array<{actionType:string;decision:OfflinePolicyDecision;maxOfflineAgeMinutes:number}> = [
+  {actionType:'LOGIN',decision:'ALLOW',maxOfflineAgeMinutes:1440},
+  {actionType:'SALE_CHECKOUT',decision:'ALLOW',maxOfflineAgeMinutes:1440},
+  {actionType:'CASH_EVENT',decision:'ALLOW',maxOfflineAgeMinutes:1440},
+  {actionType:'REFUND',decision:'REQUIRE_MANAGER_APPROVAL',maxOfflineAgeMinutes:120},
+  {actionType:'VOID',decision:'REQUIRE_MANAGER_APPROVAL',maxOfflineAgeMinutes:120},
+  {actionType:'PRICE_OVERRIDE',decision:'REQUIRE_MANAGER_APPROVAL',maxOfflineAgeMinutes:120},
+  {actionType:'CUSTOMER_CREDIT',decision:'DENY',maxOfflineAgeMinutes:0},
+  {actionType:'STOCK_ADJUSTMENT',decision:'REQUIRE_MANAGER_APPROVAL',maxOfflineAgeMinutes:240},
+  {actionType:'SUPPLIER_PAYMENT',decision:'DENY',maxOfflineAgeMinutes:0},
+];
+
+function offlinePolicyRules(policy:OfflinePolicyDetail|null):ConfigureOfflinePolicy['rules']{
+  const configured=new Map(policy?.rules.map(rule=>[rule.action_type,rule]));
+  return OFFLINE_ACTIONS.map(fallback=>{const rule=configured.get(fallback.actionType);return {actionType:fallback.actionType,decision:rule?.decision??fallback.decision,maxOfflineAgeMinutes:rule?.max_offline_age_minutes??fallback.maxOfflineAgeMinutes,constraintsJson:rule?.constraints_json??'{}'};});
+}
+
+function offlinePolicyEvidenceState(policy:OfflinePolicyDetail|null):'MISSING'|'ACTIVE'|'STALE'|'EXPIRED'|'REVIEW'{
+  if(!policy)return 'MISSING';
+  if(policy.state!=='ACTIVE'||policy.device_state!=='ACTIVE'||!policy.synchronized_at||!policy.device_valid_until)return 'REVIEW';
+  const now=Date.now();
+  if(new Date(policy.valid_until).getTime()<now||new Date(policy.device_valid_until).getTime()<now)return 'EXPIRED';
+  if(new Date(policy.synchronized_at).getTime()+policy.max_policy_staleness_minutes*60_000<now)return 'STALE';
+  return 'ACTIVE';
+}
+
+function OfflinePolicyEditor({policy,onConfigure}:{policy:OfflinePolicyDetail|null;onConfigure:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>}){
+  const [loginWindow,setLoginWindow]=useState(policy?.offline_login_window_minutes??1440);
+  const [maxStaleness,setMaxStaleness]=useState(policy?.max_policy_staleness_minutes??1440);
+  const [validDays,setValidDays]=useState(30);
+  const [rules,setRules]=useState(()=>offlinePolicyRules(policy));
+  const [busy,setBusy]=useState(false);
+  useEffect(()=>{setLoginWindow(policy?.offline_login_window_minutes??1440);setMaxStaleness(policy?.max_policy_staleness_minutes??1440);setRules(offlinePolicyRules(policy));},[policy]);
+  function updateRule(index:number,change:Partial<ConfigureOfflinePolicy['rules'][number]>) {setRules(current=>current.map((rule,position)=>position===index?{...rule,...change}:rule));}
+  async function submit(event:FormEvent){event.preventDefault();for(const rule of rules){try{const parsed=JSON.parse(rule.constraintsJson);if(!parsed||Array.isArray(parsed)||typeof parsed!=='object')throw new Error();}catch{window.alert(`${rule.actionType} constraints must be a JSON object`);return;}}setBusy(true);try{await onConfigure({offlineLoginWindowMinutes:loginWindow,maxPolicyStalenessMinutes:maxStaleness,authorizationValidDays:validDays,rules});}finally{setBusy(false);}}
+  return <article><span className="eyebrow">Owner or administrator</span><h2>Activate a new immutable version</h2><p>Changing this form retires the prior version; it does not edit historical authority evidence.</p><form className="policy-editor" onSubmit={submit}><div className="policy-window-grid"><label>Offline login window (minutes)<input type="number" min="15" max="10080" step="1" value={loginWindow} onChange={event=>setLoginWindow(event.target.valueAsNumber)} required/></label><label>Maximum policy staleness (minutes)<input type="number" min="15" max="43200" step="1" value={maxStaleness} onChange={event=>setMaxStaleness(event.target.valueAsNumber)} required/></label><label>Authorization validity (days)<input type="number" min="1" max="365" step="1" value={validDays} onChange={event=>setValidDays(event.target.valueAsNumber)} required/></label></div><div className="policy-rule-editor">{rules.map((rule,index)=><div key={rule.actionType}><b>{rule.actionType.replaceAll('_',' ')}</b><select aria-label={`${rule.actionType} decision`} value={rule.decision} onChange={event=>updateRule(index,{decision:event.target.value as OfflinePolicyDecision})}><option value="ALLOW">Allow</option><option value="REQUIRE_MANAGER_APPROVAL">Manager approval</option><option value="DENY">Deny</option></select><input aria-label={`${rule.actionType} maximum offline age`} type="number" min="0" max="43200" step="1" value={rule.maxOfflineAgeMinutes} onChange={event=>updateRule(index,{maxOfflineAgeMinutes:event.target.valueAsNumber})} required/><input aria-label={`${rule.actionType} constraints JSON`} value={rule.constraintsJson} onChange={event=>updateRule(index,{constraintsJson:event.target.value})} required/></div>)}</div><button className="primary" disabled={busy}>{busy?'Activating…':'Activate policy version'}</button></form></article>;
 }
 
 function SetupScreen({onReady,setNotice}:{onReady:()=>void;setNotice:(value:string)=>void}){

@@ -87,11 +87,59 @@ export type DiagnosticExportReceipt = {
   created_at: string;
 };
 
+export type OfflinePolicyDecision = 'ALLOW'|'REQUIRE_MANAGER_APPROVAL'|'DENY';
+
+export type OfflinePolicyRule = {
+  action_type: string;
+  decision: OfflinePolicyDecision;
+  max_offline_age_minutes: number;
+  constraints_json: string;
+};
+
+export type OfflinePolicyDetail = {
+  policy_id: string;
+  version: number;
+  state: string;
+  offline_login_window_minutes: number;
+  max_policy_staleness_minutes: number;
+  valid_from: string;
+  valid_until: string;
+  device_state: string | null;
+  synchronized_at: string | null;
+  device_valid_until: string | null;
+  rules: OfflinePolicyRule[];
+};
+
+export type ConfigureOfflinePolicy = {
+  operationId: string;
+  offlineLoginWindowMinutes: number;
+  maxPolicyStalenessMinutes: number;
+  authorizationValidDays: number;
+  rules: Array<{
+    actionType: string;
+    decision: OfflinePolicyDecision;
+    maxOfflineAgeMinutes: number;
+    constraintsJson: string;
+  }>;
+};
+
+export type OfflinePolicyResult = {
+  policy_id: string;
+  version: number;
+  state: string;
+  valid_until: string;
+  rule_count: number;
+};
+
 export const adminApi = {
   diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
   diagnosticSnapshots: () => invoke<DiagnosticSnapshot[]>('list_diagnostic_snapshots'),
   captureDiagnostics: (operationId: string) =>
     invoke<DiagnosticExportReceipt>('capture_redacted_diagnostics', { request: { operationId } }),
+  activeOfflinePolicy: () =>
+    invoke<OfflinePolicyDetail | null>('get_active_offline_policy'),
+  configureOfflinePolicy: (request: ConfigureOfflinePolicy) =>
+    invoke<OfflinePolicyResult>('configure_offline_policy', { request }),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (

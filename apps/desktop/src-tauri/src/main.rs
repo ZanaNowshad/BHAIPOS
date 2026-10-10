@@ -14,13 +14,14 @@ use bhaipos_store::{
     CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
     CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
+    ConfigureOfflinePolicyRequest as StoreConfigureOfflinePolicyRequest,
     DiagnosticCaptureRequest as StoreDiagnosticCaptureRequest, DiagnosticSnapshotResult,
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
     LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
+    OfflineActionRuleInput, OfflinePolicyDecision, OfflinePolicyDetail, OfflinePolicyResult,
     OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics, PaymentInput,
-    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
-    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
-    RestoreResult, Store,
+    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
+    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,8 @@ struct LoginResponse {
     can_manage_alerts: bool,
     can_view_diagnostics: bool,
     can_export_diagnostics: bool,
+    can_view_offline_policy: bool,
+    can_manage_offline_policy: bool,
 }
 
 #[derive(Serialize)]
@@ -108,6 +111,25 @@ struct DesktopDiagnostics {
 #[serde(rename_all = "camelCase")]
 struct CaptureDiagnosticsRequest {
     operation_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflinePolicyRuleRequest {
+    action_type: String,
+    decision: OfflinePolicyDecision,
+    max_offline_age_minutes: i64,
+    constraints_json: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigureOfflinePolicyCommandRequest {
+    operation_id: String,
+    offline_login_window_minutes: i64,
+    max_policy_staleness_minutes: i64,
+    authorization_valid_days: i64,
+    rules: Vec<OfflinePolicyRuleRequest>,
 }
 
 #[derive(Serialize)]
@@ -418,6 +440,12 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_export_diagnostics = store
         .user_has_permission(terminal, user_id, "diagnostics.export")
         .map_err(command_error)?;
+    let can_view_offline_policy = store
+        .user_has_permission(terminal, user_id, "offline_policy.view")
+        .map_err(command_error)?;
+    let can_manage_offline_policy = store
+        .user_has_permission(terminal, user_id, "offline_policy.manage")
+        .map_err(command_error)?;
     *state
         .session
         .lock()
@@ -433,6 +461,8 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         can_manage_alerts,
         can_view_diagnostics,
         can_export_diagnostics,
+        can_view_offline_policy,
+        can_manage_offline_policy,
     })
 }
 
@@ -978,6 +1008,51 @@ fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiag
 }
 
 #[tauri::command]
+fn get_active_offline_policy(
+    state: State<'_, AppState>,
+) -> Result<Option<OfflinePolicyDetail>, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .active_offline_policy(session.terminal, session.user_id)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn configure_offline_policy(
+    state: State<'_, AppState>,
+    request: ConfigureOfflinePolicyCommandRequest,
+) -> Result<OfflinePolicyResult, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .configure_offline_policy(StoreConfigureOfflinePolicyRequest {
+            context: session.terminal,
+            user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation id")?),
+            offline_login_window_minutes: request.offline_login_window_minutes,
+            max_policy_staleness_minutes: request.max_policy_staleness_minutes,
+            authorization_valid_days: request.authorization_valid_days,
+            rules: request
+                .rules
+                .into_iter()
+                .map(|rule| OfflineActionRuleInput {
+                    action_type: rule.action_type,
+                    decision: rule.decision,
+                    max_offline_age_minutes: rule.max_offline_age_minutes,
+                    constraints_json: rule.constraints_json,
+                })
+                .collect(),
+            now: Utc::now(),
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
 fn list_diagnostic_snapshots(
     state: State<'_, AppState>,
 ) -> Result<Vec<DiagnosticSnapshotSummary>, String> {
@@ -1517,6 +1592,8 @@ fn main() {
             preview_verified_restore,
             restore_verified_backup,
             get_operational_diagnostics,
+            get_active_offline_policy,
+            configure_offline_policy,
             list_diagnostic_snapshots,
             capture_redacted_diagnostics,
         ])

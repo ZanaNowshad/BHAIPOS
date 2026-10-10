@@ -952,6 +952,10 @@ fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
         f.store.configure_offline_policy(request()).unwrap_err(),
         StoreError::Authorization("offline_policy.manage")
     ));
+    assert!(matches!(
+        f.store.active_offline_policy(context, f.user).unwrap_err(),
+        StoreError::Authorization("offline_policy.view")
+    ));
     let role = Uuid::new_v4();
     f.store
         .create_role(role, f.tenant, "offline-policy-manager")
@@ -960,11 +964,31 @@ fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
         .define_permission("offline_policy.manage", "Manage offline policy")
         .unwrap();
     f.store
+        .define_permission("offline_policy.view", "View offline policy")
+        .unwrap();
+    f.store
         .grant_permission(role, "offline_policy.manage")
         .unwrap();
     f.store.assign_role(f.user, role, Some(f.branch)).unwrap();
 
     let first = f.store.configure_offline_policy(request()).unwrap();
+    assert!(matches!(
+        f.store.active_offline_policy(context, f.user).unwrap_err(),
+        StoreError::Authorization("offline_policy.view")
+    ));
+    f.store
+        .grant_permission(role, "offline_policy.view")
+        .unwrap();
+    let active = f
+        .store
+        .active_offline_policy(context, f.user)
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.policy_id, first.policy_id);
+    assert_eq!(active.version, 1);
+    assert_eq!(active.device_state.as_deref(), Some("ACTIVE"));
+    assert_eq!(active.rules.len(), 3);
+    assert_eq!(active.rules[0].action_type, "LOGIN");
     let replay = f.store.configure_offline_policy(request()).unwrap();
     assert_eq!(first, replay);
     assert_eq!(first.version, 1);

@@ -13,6 +13,108 @@ const OFFLINE_ACTIONS: &[&str] = &[
 ];
 
 impl Store {
+    pub fn active_offline_policy(
+        &self,
+        context: LocalTerminalContext,
+        user_id: UserId,
+    ) -> Result<Option<OfflinePolicyDetail>, StoreError> {
+        self.validate_local_session(context, user_id)?;
+        if !self.user_has_permission(context, user_id, "offline_policy.view")? {
+            return Err(StoreError::Authorization("offline_policy.view"));
+        }
+        type PolicyRow = (
+            String,
+            i64,
+            String,
+            i64,
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let policy: Option<PolicyRow> = self
+            .conn
+            .query_row(
+                "SELECT p.id,p.version,p.state,p.offline_login_window_minutes,p.max_policy_staleness_minutes,p.valid_from,p.valid_until,d.state,d.synchronized_at,d.valid_until FROM offline_policy_versions p LEFT JOIN device_offline_policy_state d ON d.policy_id=p.id AND d.tenant_id=p.tenant_id AND d.branch_id=p.branch_id AND d.device_id=?3 WHERE p.tenant_id=?1 AND p.branch_id=?2 AND p.state='ACTIVE' ORDER BY p.version DESC LIMIT 1",
+                params![
+                    context.tenant_id.to_string(),
+                    context.branch_id.to_string(),
+                    context.device_id.to_string()
+                ],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            policy_id,
+            version,
+            state,
+            offline_login_window_minutes,
+            max_policy_staleness_minutes,
+            valid_from,
+            valid_until,
+            device_state,
+            synchronized_at,
+            device_valid_until,
+        )) = policy
+        else {
+            return Ok(None);
+        };
+        let policy_id = Uuid::parse_str(&policy_id)
+            .map_err(|_| StoreError::Validation("invalid offline policy identity".into()))?;
+        let mut statement = self.conn.prepare(
+            "SELECT action_type,decision,max_offline_age_minutes,constraints_json FROM offline_policy_rules WHERE tenant_id=?1 AND policy_id=?2 ORDER BY action_type",
+        )?;
+        let rules = statement
+            .query_map(
+                params![context.tenant_id.to_string(), policy_id.to_string()],
+                |row| {
+                    let decision: String = row.get(1)?;
+                    let decision = match decision.as_str() {
+                        "ALLOW" => OfflinePolicyDecision::Allow,
+                        "REQUIRE_MANAGER_APPROVAL" => {
+                            OfflinePolicyDecision::RequireManagerApproval
+                        }
+                        _ => OfflinePolicyDecision::Deny,
+                    };
+                    Ok(OfflinePolicyRuleSummary {
+                        action_type: row.get(0)?,
+                        decision,
+                        max_offline_age_minutes: row.get(2)?,
+                        constraints_json: row.get(3)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(OfflinePolicyDetail {
+            policy_id,
+            version,
+            state,
+            offline_login_window_minutes,
+            max_policy_staleness_minutes,
+            valid_from,
+            valid_until,
+            device_state,
+            synchronized_at,
+            device_valid_until,
+            rules,
+        }))
+    }
+
     pub fn configure_offline_policy(
         &mut self,
         request: ConfigureOfflinePolicyRequest,

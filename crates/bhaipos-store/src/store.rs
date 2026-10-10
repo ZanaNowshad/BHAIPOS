@@ -540,6 +540,29 @@ pub struct OfflinePolicyResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfflinePolicyRuleSummary {
+    pub action_type: String,
+    pub decision: OfflinePolicyDecision,
+    pub max_offline_age_minutes: i64,
+    pub constraints_json: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfflinePolicyDetail {
+    pub policy_id: Uuid,
+    pub version: i64,
+    pub state: String,
+    pub offline_login_window_minutes: i64,
+    pub max_policy_staleness_minutes: i64,
+    pub valid_from: String,
+    pub valid_until: String,
+    pub device_state: Option<String>,
+    pub synchronized_at: Option<String>,
+    pub device_valid_until: Option<String>,
+    pub rules: Vec<OfflinePolicyRuleSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OfflineAuthorizationResult {
     pub policy_id: Option<Uuid>,
     pub policy_version: Option<i64>,
