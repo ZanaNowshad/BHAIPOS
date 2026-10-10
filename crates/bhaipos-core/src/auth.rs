@@ -19,13 +19,8 @@ const PIN_PARALLELISM: u32 = 1;
 const CURRENT_PIN_HASH_PREFIX: &str = "$argon2id$v=19$m=19456,t=2,p=1$";
 
 fn pin_argon2() -> Argon2<'static> {
-    let params = Params::new(
-        PIN_MEMORY_KIB,
-        PIN_ITERATIONS,
-        PIN_PARALLELISM,
-        None,
-    )
-    .expect("valid audited Argon2id PIN parameters");
+    let params = Params::new(PIN_MEMORY_KIB, PIN_ITERATIONS, PIN_PARALLELISM, None)
+        .expect("valid audited Argon2id PIN parameters");
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 

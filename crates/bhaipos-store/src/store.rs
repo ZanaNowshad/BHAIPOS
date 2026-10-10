@@ -1,9 +1,9 @@
 use bhaipos_core::{
-    compute_audit_hash, hash_pin, hash_secret, pin_hash_needs_upgrade, price_times_quantity, sha256_hex,
-    sign_sync_mutation, verify_approval, verify_pin, verify_secret, verify_sync_mutation,
-    ApprovalBinding, AuditMaterial, BranchId, CartId, DeviceId, Money, OperationId, ProductId,
-    QuantityMilli, RegisterId, SaleId, SyncMutationEnvelope, SyncMutationMaterial, TaxCategory,
-    TaxRule, TenantId, TenderKind, UserId,
+    compute_audit_hash, hash_pin, hash_secret, pin_hash_needs_upgrade, price_times_quantity,
+    sha256_hex, sign_sync_mutation, verify_approval, verify_pin, verify_secret,
+    verify_sync_mutation, ApprovalBinding, AuditMaterial, BranchId, CartId, DeviceId, Money,
+    OperationId, ProductId, QuantityMilli, RegisterId, SaleId, SyncMutationEnvelope,
+    SyncMutationMaterial, TaxCategory, TaxRule, TenantId, TenderKind, UserId,
 };
 use chrono::{DateTime, Datelike, FixedOffset, Timelike, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
@@ -27,10 +27,10 @@ mod delivery_ops;
 mod diagnostics_ops;
 #[path = "expense_ops.rs"]
 mod expense_ops;
-#[path = "job_ops.rs"]
-mod job_ops;
 #[path = "identity_ops.rs"]
 mod identity_ops;
+#[path = "job_ops.rs"]
+mod job_ops;
 #[path = "offline_policy_ops.rs"]
 mod offline_policy_ops;
 #[path = "procurement.rs"]
@@ -1646,8 +1646,8 @@ impl Store {
         }
         if verify_pin(&hash, pin) {
             if pin_hash_needs_upgrade(&hash) {
-                let upgraded = hash_pin(pin)
-                    .map_err(|error| StoreError::Validation(error.to_string()))?;
+                let upgraded =
+                    hash_pin(pin).map_err(|error| StoreError::Validation(error.to_string()))?;
                 self.conn.execute(
                     "UPDATE users SET pin_hash=?2,failed_attempts=0,locked_until=NULL,status='ACTIVE' WHERE id=?1",
                     params![user.to_string(), upgraded],

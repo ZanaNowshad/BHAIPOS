@@ -125,7 +125,7 @@ impl Store {
         )?;
         let targets = {
             let mut statement = tx.prepare("SELECT u.id,u.display_name,u.status FROM users u WHERE u.tenant_id=?1 AND u.employee_no=?2 AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3)) LIMIT 2")?;
-            statement
+            let rows = statement
                 .query_map(
                     params![
                         req.context.tenant_id.to_string(),
@@ -139,8 +139,8 @@ impl Store {
                             row.get::<_, String>(2)?,
                         ))
                     },
-                )?
-                .collect::<Result<Vec<_>, _>>()?
+                )?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         if targets.len() != 1 {
             return Err(StoreError::Authorization(
@@ -191,9 +191,27 @@ impl Store {
             event_type: req.action.event_type().into(),
         };
         let payload = serde_json::to_string(&result)?;
-        Self::append_audit(&tx,req.context.tenant_id,req.context.device_id,req.actor_user_id,"USER_SECURITY_CHANGED","user",target_id,&payload,req.now)?;
+        Self::append_audit(
+            &tx,
+            req.context.tenant_id,
+            req.context.device_id,
+            req.actor_user_id,
+            "USER_SECURITY_CHANGED",
+            "user",
+            target_id,
+            &payload,
+            req.now,
+        )?;
         tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'user',?6,'SECURITY',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.context.tenant_id.to_string(),req.context.branch_id.to_string(),req.context.device_id.to_string(),req.operation_id.to_string(),target_id,payload,req.now.to_rfc3339()])?;
-        Self::record_store_operation(&tx,req.context.tenant_id,req.operation_id,"USER_SECURITY",&digest,&result,req.now)?;
+        Self::record_store_operation(
+            &tx,
+            req.context.tenant_id,
+            req.operation_id,
+            "USER_SECURITY",
+            &digest,
+            &result,
+            req.now,
+        )?;
         tx.commit()?;
         Ok(result)
     }

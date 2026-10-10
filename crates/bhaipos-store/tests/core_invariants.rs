@@ -264,10 +264,7 @@ fn administrative_user_security_is_scoped_idempotent_and_immutable() {
         reason: "Verified owner credential recovery".into(),
         now,
     };
-    let first = f
-        .store
-        .administer_user_security(reset.clone())
-        .unwrap();
+    let first = f.store.administer_user_security(reset.clone()).unwrap();
     assert_eq!(first.event_type, "PIN_RESET");
     assert_eq!(first.previous_status, "ACTIVE");
     assert_eq!(first.new_status, "ACTIVE");
@@ -275,31 +272,19 @@ fn administrative_user_security_is_scoped_idempotent_and_immutable() {
         .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "9753", now, 5, 15)
         .unwrap();
     f.store
-        .rotate_local_device_credential(
-            context,
-            f.user,
-            "rotated-device-secret-0123456789",
-            now,
-        )
+        .rotate_local_device_credential(context, f.user, "rotated-device-secret-0123456789", now)
         .unwrap();
-    assert_eq!(
-        first,
-        f.store
-            .administer_user_security(reset)
-            .unwrap()
-    );
-    let mismatch = f.store.administer_user_security(
-        UserSecurityRequest {
-            context,
-            actor_user_id: f.user,
-            operation_id,
-            target_employee_no: "EMP-RECOVERY".into(),
-            action: UserSecurityAction::ResetPin,
-            new_pin: Some("8642".into()),
-            reason: "Verified owner credential recovery".into(),
-            now,
-        },
-    );
+    assert_eq!(first, f.store.administer_user_security(reset).unwrap());
+    let mismatch = f.store.administer_user_security(UserSecurityRequest {
+        context,
+        actor_user_id: f.user,
+        operation_id,
+        target_employee_no: "EMP-RECOVERY".into(),
+        action: UserSecurityAction::ResetPin,
+        new_pin: Some("8642".into()),
+        reason: "Verified owner credential recovery".into(),
+        now,
+    });
     assert!(matches!(mismatch, Err(StoreError::Conflict(_))));
     assert_eq!(
         f.store
@@ -317,75 +302,70 @@ fn administrative_user_security_is_scoped_idempotent_and_immutable() {
         .connection()
         .execute(
             "UPDATE users SET status='LOCKED',locked_until=?2 WHERE id=?1",
-            params![target.to_string(), (now + chrono::Duration::hours(1)).to_rfc3339()],
+            params![
+                target.to_string(),
+                (now + chrono::Duration::hours(1)).to_rfc3339()
+            ],
         )
         .unwrap();
     f.store
-        .administer_user_security(
-            UserSecurityRequest {
-                context,
-                actor_user_id: f.user,
-                operation_id: OperationId::new(),
-                target_employee_no: "EMP-RECOVERY".into(),
-                action: UserSecurityAction::ResetPin,
-                new_pin: Some("1357".into()),
-                reason: "Reset while preserving lock review".into(),
-                now,
-            },
-        )
-        .unwrap();
-    assert!(f
-        .store
-        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
-        .is_err());
-    f.store
-        .administer_user_security(
-            UserSecurityRequest {
-                context,
-                actor_user_id: f.user,
-                operation_id: OperationId::new(),
-                target_employee_no: "EMP-RECOVERY".into(),
-                action: UserSecurityAction::Unlock,
-                new_pin: None,
-                reason: "Lockout reviewed by owner".into(),
-                now,
-            },
-        )
-        .unwrap();
-    f.store
-        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
-        .unwrap();
-    f.store
-        .administer_user_security(
-            UserSecurityRequest {
-                context,
-                actor_user_id: f.user,
-                operation_id: OperationId::new(),
-                target_employee_no: "EMP-RECOVERY".into(),
-                action: UserSecurityAction::Suspend,
-                new_pin: None,
-                reason: "Employment access suspended".into(),
-                now,
-            },
-        )
+        .administer_user_security(UserSecurityRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            target_employee_no: "EMP-RECOVERY".into(),
+            action: UserSecurityAction::ResetPin,
+            new_pin: Some("1357".into()),
+            reason: "Reset while preserving lock review".into(),
+            now,
+        })
         .unwrap();
     assert!(f
         .store
         .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
         .is_err());
     f.store
-        .administer_user_security(
-            UserSecurityRequest {
-                context,
-                actor_user_id: f.user,
-                operation_id: OperationId::new(),
-                target_employee_no: "EMP-RECOVERY".into(),
-                action: UserSecurityAction::Reactivate,
-                new_pin: None,
-                reason: "Employment access restored".into(),
-                now,
-            },
-        )
+        .administer_user_security(UserSecurityRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            target_employee_no: "EMP-RECOVERY".into(),
+            action: UserSecurityAction::Unlock,
+            new_pin: None,
+            reason: "Lockout reviewed by owner".into(),
+            now,
+        })
+        .unwrap();
+    f.store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .unwrap();
+    f.store
+        .administer_user_security(UserSecurityRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            target_employee_no: "EMP-RECOVERY".into(),
+            action: UserSecurityAction::Suspend,
+            new_pin: None,
+            reason: "Employment access suspended".into(),
+            now,
+        })
+        .unwrap();
+    assert!(f
+        .store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .is_err());
+    f.store
+        .administer_user_security(UserSecurityRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            target_employee_no: "EMP-RECOVERY".into(),
+            action: UserSecurityAction::Reactivate,
+            new_pin: None,
+            reason: "Employment access restored".into(),
+            now,
+        })
         .unwrap();
     f.store
         .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)

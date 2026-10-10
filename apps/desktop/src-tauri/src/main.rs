@@ -663,18 +663,16 @@ fn administer_user_security(
         .map_err(|_| "database state poisoned".to_string())?;
     require_offline_action(&store, session, "USER_SECURITY", now)?;
     store
-        .administer_user_security(
-            StoreUserSecurityRequest {
-                context: session.terminal,
-                actor_user_id: session.user_id,
-                operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
-                target_employee_no: request.target_employee_no,
-                action: request.action,
-                new_pin: request.new_pin,
-                reason: request.reason,
-                now,
-            },
-        )
+        .administer_user_security(StoreUserSecurityRequest {
+            context: session.terminal,
+            actor_user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            target_employee_no: request.target_employee_no,
+            action: request.action,
+            new_pin: request.new_pin,
+            reason: request.reason,
+            now,
+        })
         .map_err(command_error)
 }
 
