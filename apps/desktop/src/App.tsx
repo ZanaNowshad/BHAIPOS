@@ -3,7 +3,7 @@ import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, ty
 import { adminApi, type ConfigureOfflinePolicy, type DiagnosticSnapshot, type OfflinePolicyDecision, type OfflinePolicyDetail, type OperationalDiagnostics, type RestorePreview } from './api/admin';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
-type Phase = 'loading'|'setup'|'login'|'cashier'|'admin'|'diagnostics';
+type Phase = 'loading'|'setup'|'login'|'policy-recovery'|'cashier'|'admin'|'diagnostics';
 type Tender = Payment['kind'];
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -52,8 +52,10 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy); setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,policyRecoveryRequired:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy);
+    if(policyRecoveryRequired){setOfflinePolicy(await adminApi.activeOfflinePolicy());setPhase('policy-recovery');setNotice('Selling is locked until a bounded offline policy is activated');return;}
+    setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
   }
 
@@ -204,6 +206,7 @@ export function App() {
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
+  if (phase==='policy-recovery') return <OfflinePolicyRecoveryScreen policy={offlinePolicy} notice={notice} onConfigure={configureOfflinePolicy} onLock={lock}/>;
   if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
@@ -241,9 +244,9 @@ export function App() {
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,policyRecoveryRequired:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy,result.offlinePolicyRecoveryRequired);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
 }
 
@@ -256,6 +259,16 @@ function AlertCentre({alerts,canManage,notice,onTransition,onRefresh,onCashier,o
         <div className="alert-copy"><div><span className="alert-severity">{alert.severity}</span><span className="alert-type">{alert.alert_type.replaceAll('_',' ')}</span></div><h2>{alert.title}</h2><p>{alert.status.replace('_',' ')} · {new Date(alert.created_at).toLocaleString()}</p></div>
         {canManage&&<div className="alert-actions">{alert.status==='NEW'&&action(alert,'ACKNOWLEDGED','Acknowledge')}{alert.status==='ACKNOWLEDGED'&&<>{action(alert,'IN_PROGRESS','Investigate')}{action(alert,'DISMISSED','Dismiss')}</>}{alert.status==='IN_PROGRESS'&&<>{action(alert,'RESOLVED','Resolve')}{action(alert,'DISMISSED','Dismiss')}</>}</div>}
       </article>)}</section>
+    </main>
+  </div>;
+}
+
+function OfflinePolicyRecoveryScreen({policy,notice,onConfigure,onLock}:{policy:OfflinePolicyDetail|null;notice:string;onConfigure:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onLock:()=>Promise<void>}){
+  return <div className="admin-shell">
+    <nav className="admin-nav"><h2>BHAIPOS</h2><button className="active">Policy Recovery</button><button onClick={onLock}>Lock Terminal</button></nav>
+    <main className="admin-main"><header><div><span className="eyebrow">Restricted owner/administrator session</span><h1>Offline authority recovery</h1><p>{notice}</p></div><span className="badge policy-review">SELLING LOCKED</span></header>
+      <section className="recovery-warning"><h2>No operational command is available in this session</h2><p>The verified PIN established identity only. Activate a bounded immutable policy below, then lock the terminal and sign in again. An explicit policy denial or revoked device cannot enter this recovery path.</p></section>
+      <section className="policy-section recovery-policy"><article><h2>Current evidence</h2>{policy?<dl className="diagnostic-list"><dt>Policy version</dt><dd>{policy.version}</dd><dt>State</dt><dd>{policy.state}</dd><dt>Device checkpoint</dt><dd>{policy.device_state??'MISSING'}</dd><dt>Synchronized</dt><dd>{policy.synchronized_at?new Date(policy.synchronized_at).toLocaleString():'never'}</dd><dt>Expires</dt><dd>{new Date(policy.valid_until).toLocaleString()}</dd></dl>:<p>No active branch policy exists.</p>}<button onClick={onLock}>Finish and sign in again</button></article><OfflinePolicyEditor policy={policy} onConfigure={onConfigure}/></section>
     </main>
   </div>;
 }

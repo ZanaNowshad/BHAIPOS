@@ -1,7 +1,7 @@
 # BHAIPOS Remaining Work Master Checklist
 
 Assessment date: 2026-10-10
-Baseline: public `main` commit `a72cba026c41382857724aab8862de72cb187f24`
+Baseline: public `main` commit `606789c417d1a8b46ced68edf958091acef8b895`
 Source of truth: `docs/REQUIREMENT_COVERAGE.md`, `docs/IMPLEMENTATION_STATUS.md`, and the repository at the baseline above.
 
 This is the dependency-ordered backlog for taking BHAIPOS from its current state to a production release. A checked source-code task is not automatically a completed capability. Each capability must also satisfy the common completion gate below.
@@ -27,7 +27,7 @@ Coverage distribution at this baseline:
 | NOT STARTED | 11 | 17.2% |
 | BLOCKED | 1 | 1.6% |
 
-Since the prior checklist baseline, the completed source work is: durable redacted diagnostic snapshots/exports and history, live non-secret printer reachability diagnostics, the immutable versioned bounded offline-policy domain foundation, and a permission-scoped policy read/configuration surface with explicit per-action rules. GitHub Actions runs `37998456402`, `37999043385`, and `37999637896` passed all configured jobs for the merged work. The administration branch passes the Python foundation verifier plus desktop TypeScript and production builds; Rust CI is required before merge. Policy enforcement and reconciliation remain the active Step 2 gate.
+Since the prior checklist baseline, the completed source work is: durable redacted diagnostic snapshots/exports and history, live non-secret printer reachability diagnostics, the immutable versioned bounded offline-policy domain foundation, and a permission-scoped policy read/configuration surface with explicit per-action rules. GitHub Actions runs `37998456402`, `37999043385`, `37999637896`, and `38082366084` passed all configured jobs for the merged work. Disconnected-login and protected-action enforcement is the active Step 2 coding gate; reconciliation and Windows runtime evidence remain.
 
 ## Common completion gate for every capability
 
@@ -62,7 +62,7 @@ Since the prior checklist baseline, the completed source work is: durable redact
 ## Step 2 — Finish foundational identity, authorization, and offline policy
 
 - [x] Define versioned offline policy records and bounded offline authorization windows.
-- [ ] Enforce credential/policy expiry for disconnected login and protected actions.
+- [ ] Enforce credential/policy expiry for disconnected login and protected actions. **IN PROGRESS:** login, checkout, customer credit, refund, and cash-event decisions are enforced in the trusted desktop boundary; remaining schema-ready sensitive commands, manager-approval consumption, hub refresh, and Windows recovery evidence remain.
 - [x] Define configurable offline allow/manager-approval/deny rules for login, checkout, cash events, refund, void, price override, customer credit, stock adjustment, and supplier payment.
 - [ ] Add reconciliation outcomes for actions accepted under stale policy.
 - [ ] Finish administrative PIN reset, account unlock, suspension, and credential-upgrade workflows.
