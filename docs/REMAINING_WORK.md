@@ -1,7 +1,7 @@
 # BHAIPOS Remaining Work Master Checklist
 
 Assessment date: 2026-10-10
-Baseline: public `main` commit `606789c417d1a8b46ced68edf958091acef8b895`
+Baseline: public `main` commit `c8ae1ad712395a44b9ea65f09102a1409915d12c`
 Source of truth: `docs/REQUIREMENT_COVERAGE.md`, `docs/IMPLEMENTATION_STATUS.md`, and the repository at the baseline above.
 
 This is the dependency-ordered backlog for taking BHAIPOS from its current state to a production release. A checked source-code task is not automatically a completed capability. Each capability must also satisfy the common completion gate below.
@@ -27,7 +27,7 @@ Coverage distribution at this baseline:
 | NOT STARTED | 11 | 17.2% |
 | BLOCKED | 1 | 1.6% |
 
-Since the prior checklist baseline, the completed source work is: durable redacted diagnostic snapshots/exports and history, live non-secret printer reachability diagnostics, the immutable versioned bounded offline-policy domain foundation, and a permission-scoped policy read/configuration surface with explicit per-action rules. GitHub Actions runs `37998456402`, `37999043385`, `37999637896`, and `38082366084` passed all configured jobs for the merged work. Disconnected-login and protected-action enforcement is the active Step 2 coding gate; reconciliation and Windows runtime evidence remain.
+Since the prior checklist baseline, the completed source work is: durable redacted diagnostic snapshots/exports and history, live non-secret printer reachability diagnostics, the immutable versioned bounded offline-policy domain foundation, a permission-scoped policy read/configuration surface, and trusted disconnected-login/protected-action enforcement. GitHub Actions run `38083103186` passed every configured gate for policy enforcement merged at the baseline above. Atomic refund/cash manager approval is the active Step 2 coding gate; remaining sensitive actions, reconciliation and Windows runtime evidence remain.
 
 ## Common completion gate for every capability
 
@@ -62,12 +62,12 @@ Since the prior checklist baseline, the completed source work is: durable redact
 ## Step 2 — Finish foundational identity, authorization, and offline policy
 
 - [x] Define versioned offline policy records and bounded offline authorization windows.
-- [ ] Enforce credential/policy expiry for disconnected login and protected actions. **IN PROGRESS:** login, checkout, customer credit, refund, and cash-event decisions are enforced in the trusted desktop boundary; remaining schema-ready sensitive commands, manager-approval consumption, hub refresh, and Windows recovery evidence remain.
+- [ ] Enforce credential/policy expiry for disconnected login and protected actions. **IN PROGRESS:** login, checkout, customer credit, refund, and cash-event decisions are enforced in the trusted desktop boundary; refund/cash manager approval consumption is implemented in the working tree; remaining schema-ready sensitive commands, hub refresh, CI and Windows recovery evidence remain.
 - [x] Define configurable offline allow/manager-approval/deny rules for login, checkout, cash events, refund, void, price override, customer credit, stock adjustment, and supplier payment.
 - [ ] Add reconciliation outcomes for actions accepted under stale policy.
 - [ ] Finish administrative PIN reset, account unlock, suspension, and credential-upgrade workflows.
 - [ ] Finish configurable custom-role and permission administration with change audit.
-- [ ] Integrate action-bound manager approval into every sensitive action, not only voids.
+- [ ] Integrate action-bound manager approval into every sensitive action. **IN PROGRESS:** void plus atomic offline refund/cash-event integration exist; price override, stock adjustment, supplier payment and other policy-controlled workflows remain.
 - [ ] Store approval signing keys in production-grade OS-backed custody and define rotation/recovery.
 - [ ] Add approval replay/expiry/action/payload/target/branch/device mismatch tests for every integrated action.
 - [ ] Add session timeout, forced lock, lockout policy administration, and revocation-on-reconnect behavior.

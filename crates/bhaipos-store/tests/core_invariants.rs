@@ -7,9 +7,9 @@ use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
     CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
-    LocalBootstrapRequest, NewProduct, OfflineActionRuleInput, OfflineAuthorizationReason,
-    OfflinePolicyDecision, PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest,
-    Store, StoreError, SyncDeliveryOutcome,
+    LocalBootstrapRequest, ManagerApprovalGrant, NewProduct, OfflineActionRuleInput,
+    OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput, RefundRequest,
+    RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -2479,6 +2479,7 @@ fn manager_approval_is_action_payload_device_bound_and_single_use() {
     let secret = b"test-only-secret";
     let binding = ApprovalBinding {
         tenant_id: f.tenant,
+        branch_id: f.branch,
         approver_user_id: manager,
         device_id: f.device,
         operation_id: OperationId::new(),
@@ -2486,6 +2487,7 @@ fn manager_approval_is_action_payload_device_bound_and_single_use() {
         entity_id: f.product.to_string(),
         payload_sha256: sha256_hex(br#"{"price_fils":950}"#),
         nonce: Uuid::new_v4().to_string(),
+        issued_at: now,
         expires_at: now + chrono::Duration::minutes(2),
     };
     let sig = sign_approval(secret, &binding);
@@ -2504,6 +2506,195 @@ fn manager_approval_is_action_payload_device_bound_and_single_use() {
         .consume_manager_approval(secret, &altered, &sig, "manager.approve", now)
         .unwrap_err();
     assert!(matches!(altered_err, StoreError::Authorization(_)));
+}
+
+#[test]
+fn refund_and_cash_manager_approvals_are_atomic_exact_and_replay_safe() {
+    let mut f = fixture();
+    let now = t("2026-09-29T01:00:00Z");
+    let manager = UserId::new();
+    f.store
+        .create_user(
+            manager,
+            f.tenant,
+            "Duty Manager",
+            &hash_pin("7777").unwrap(),
+            now,
+        )
+        .unwrap();
+    let role = Uuid::new_v4();
+    f.store.create_role(role, f.tenant, "duty-manager").unwrap();
+    f.store
+        .define_permission("manager.approve", "Approve sensitive actions")
+        .unwrap();
+    f.store.grant_permission(role, "manager.approve").unwrap();
+    f.store.assign_role(manager, role, Some(f.branch)).unwrap();
+    let secret = b"device-protected-manager-secret";
+    let approval_tenant = f.tenant;
+    let approval_branch = f.branch;
+    let approval_device = f.device;
+    let grant = |operation_id: OperationId, action: &str, entity_id: String, payload_sha256: String| {
+        let binding = ApprovalBinding {
+            tenant_id: approval_tenant,
+            branch_id: approval_branch,
+            approver_user_id: manager,
+            device_id: approval_device,
+            operation_id,
+            action: action.into(),
+            entity_id,
+            payload_sha256,
+            nonce: Uuid::new_v4().to_string(),
+            issued_at: now,
+            expires_at: now + chrono::Duration::minutes(2),
+        };
+        ManagerApprovalGrant {
+            signature_hex: sign_approval(secret, &binding),
+            binding,
+        }
+    };
+
+    let cart = cart_with_one(&f, now);
+    let sale = f
+        .store
+        .checkout(CheckoutRequest {
+            tenant_id: f.tenant,
+            branch_id: f.branch,
+            device_id: f.device,
+            register_id: f.register,
+            user_id: f.user,
+            cart_id: cart,
+            operation_id: OperationId::new(),
+            cash_session_id: Some(f.cash_session),
+            payments: vec![PaymentInput {
+                kind: TenderKind::Cash,
+                amount: Money(1100),
+                tendered: Some(Money(1100)),
+                reference: None,
+            }],
+            now,
+        })
+        .unwrap();
+    let sale_line = Uuid::parse_str(
+        &f.store
+            .connection()
+            .query_row(
+                "SELECT id FROM sale_lines WHERE sale_id=?1",
+                params![sale.sale_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let refund_operation = OperationId::new();
+    let refund_request = RefundRequest {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        user_id: f.user,
+        operation_id: refund_operation,
+        sale_id: sale.sale_id,
+        reason: "approved return".into(),
+        lines: vec![RefundLineInput {
+            sale_line_id: sale_line,
+            quantity: QuantityMilli(500),
+        }],
+        cash_session_id: Some(f.cash_session),
+        payments: vec![PaymentInput {
+            kind: TenderKind::Cash,
+            amount: Money(550),
+            tendered: None,
+            reference: None,
+        }],
+        now,
+    };
+    let refund_grant = grant(
+        refund_operation,
+        "sale.refund",
+        sale.sale_id.to_string(),
+        Store::refund_approval_payload_sha256(&refund_request).unwrap(),
+    );
+    let refunded = f
+        .store
+        .refund_authorized(
+            refund_request.clone(),
+            true,
+            Some(secret),
+            Some(&refund_grant),
+        )
+        .unwrap();
+    let replay = f
+        .store
+        .refund_authorized(
+            refund_request,
+            true,
+            Some(secret),
+            Some(&refund_grant),
+        )
+        .unwrap();
+    assert_eq!(refunded, replay);
+
+    let cash_operation = OperationId::new();
+    let cash_request = CashMovementRequest {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        user_id: f.user,
+        cash_session_id: f.cash_session,
+        operation_id: cash_operation,
+        kind: CashMovementKind::PaidOut,
+        amount: Money(500),
+        reason: Some("courier float".into()),
+        now,
+    };
+    let mismatched = grant(
+        cash_operation,
+        "cash.movement",
+        Uuid::new_v4().to_string(),
+        Store::cash_movement_approval_payload_sha256(&cash_request).unwrap(),
+    );
+    assert!(matches!(
+        f.store.record_cash_movement_authorized(
+            cash_request.clone(),
+            true,
+            Some(secret),
+            Some(&mismatched)
+        ),
+        Err(StoreError::Authorization(_))
+    ));
+    let cash_grant = grant(
+        cash_operation,
+        "cash.movement",
+        f.cash_session.to_string(),
+        Store::cash_movement_approval_payload_sha256(&cash_request).unwrap(),
+    );
+    f.store
+        .record_cash_movement_authorized(
+            cash_request,
+            true,
+            Some(secret),
+            Some(&cash_grant),
+        )
+        .unwrap();
+    let approval_count: i64 = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM manager_approval_consumptions WHERE tenant_id=?1 AND branch_id=?2",
+            params![f.tenant.to_string(), f.branch.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(approval_count, 2);
+    let audit_count: i64 = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE tenant_id=?1 AND event_type='MANAGER_APPROVAL_CONSUMED'",
+            params![f.tenant.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(audit_count, 2);
 }
 
 #[test]
@@ -3159,6 +3350,7 @@ fn sale_void_is_compensating_idempotent_and_preserves_original_receipt() {
     let secret = b"void-approval-secret";
     let binding = ApprovalBinding {
         tenant_id: f.tenant,
+        branch_id: f.branch,
         approver_user_id: manager,
         device_id: f.device,
         operation_id: op,
@@ -3166,6 +3358,7 @@ fn sale_void_is_compensating_idempotent_and_preserves_original_receipt() {
         entity_id: sale.sale_id.to_string(),
         payload_sha256: Store::void_sale_payload_sha256(sale.sale_id, Some(f.cash_session), reason),
         nonce: Uuid::new_v4().to_string(),
+        issued_at: now,
         expires_at: now + chrono::Duration::minutes(2),
     };
     let sig = sign_approval(secret, &binding);

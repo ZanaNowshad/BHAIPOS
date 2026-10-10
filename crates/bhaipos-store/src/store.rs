@@ -66,7 +66,9 @@ const MIGRATION_0023: &str = include_str!("../../../migrations/0023_diagnostics.
 const MIGRATION_0024: &str = include_str!("../../../migrations/0024_diagnostic_exports.sql");
 const MIGRATION_0025: &str =
     include_str!("../../../migrations/0025_offline_authorization_policy.sql");
-pub const LATEST_SCHEMA: &str = "0025_offline_authorization_policy";
+const MIGRATION_0026: &str =
+    include_str!("../../../migrations/0026_manager_approval_evidence.sql");
+pub const LATEST_SCHEMA: &str = "0026_manager_approval_evidence";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -153,6 +155,12 @@ pub struct RefundRequest {
     pub cash_session_id: Option<Uuid>,
     pub payments: Vec<PaymentInput>,
     pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ManagerApprovalGrant {
+    pub binding: ApprovalBinding,
+    pub signature_hex: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefundResult {
@@ -1186,6 +1194,19 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0023)?;
         self.conn.execute_batch(MIGRATION_0024)?;
         self.conn.execute_batch(MIGRATION_0025)?;
+        for (column, ddl) in [
+            (
+                "branch_id",
+                "ALTER TABLE manager_approval_consumptions ADD COLUMN branch_id TEXT REFERENCES branches(id)",
+            ),
+            (
+                "issued_at",
+                "ALTER TABLE manager_approval_consumptions ADD COLUMN issued_at TEXT",
+            ),
+        ] {
+            Self::ensure_column(&self.conn, "manager_approval_consumptions", column, ddl)?;
+        }
+        self.conn.execute_batch(MIGRATION_0026)?;
         Ok(())
     }
     fn ensure_column(
@@ -1644,37 +1665,77 @@ impl Store {
         required_permission: &str,
         now: DateTime<Utc>,
     ) -> Result<Uuid, StoreError> {
-        if !verify_approval(secret, binding, signature_hex, now) {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = ManagerApprovalGrant {
+            binding: binding.clone(),
+            signature_hex: signature_hex.to_owned(),
+        };
+        let id = Self::consume_manager_approval_tx(
+            &tx,
+            secret,
+            &grant,
+            required_permission,
+            binding.tenant_id,
+            binding.branch_id,
+            binding.device_id,
+            binding.operation_id,
+            &binding.action,
+            &binding.entity_id,
+            &binding.payload_sha256,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn consume_manager_approval_tx(
+        tx: &Transaction<'_>,
+        secret: &[u8],
+        grant: &ManagerApprovalGrant,
+        required_permission: &str,
+        tenant_id: TenantId,
+        branch_id: BranchId,
+        device_id: DeviceId,
+        operation_id: OperationId,
+        action: &str,
+        entity_id: &str,
+        payload_sha256: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Uuid, StoreError> {
+        let binding = &grant.binding;
+        if !verify_approval(secret, binding, &grant.signature_hex, now) {
             return Err(StoreError::Authorization(
                 "invalid or expired manager approval",
             ));
         }
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let branch_s: Option<String> = tx
-            .query_row(
-                "SELECT branch_id FROM devices WHERE id=?1 AND tenant_id=?2 AND status='ACTIVE'",
-                params![binding.device_id.to_string(), binding.tenant_id.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let branch_s = branch_s.ok_or(StoreError::Authorization("approval device not active"))?;
-        let branch_uuid = Uuid::parse_str(&branch_s)
-            .map_err(|_| StoreError::Validation("invalid branch identity".into()))?;
-        let branch = BranchId(branch_uuid);
-        Self::assert_user_scope(&tx, binding.tenant_id, binding.approver_user_id)?;
+        if binding.tenant_id != tenant_id
+            || binding.branch_id != branch_id
+            || binding.device_id != device_id
+            || binding.operation_id != operation_id
+            || binding.action != action
+            || binding.entity_id != entity_id
+            || binding.payload_sha256 != payload_sha256
+        {
+            return Err(StoreError::Authorization(
+                "manager approval does not match exact operation",
+            ));
+        }
+        Self::assert_active_device_tx(tx, tenant_id, branch_id, device_id)?;
+        Self::assert_user_scope(tx, tenant_id, binding.approver_user_id)?;
         Self::assert_permission(
-            &tx,
-            binding.tenant_id,
-            branch,
+            tx,
+            tenant_id,
+            branch_id,
             binding.approver_user_id,
             required_permission,
         )?;
         let used: Option<i32> = tx
             .query_row(
                 "SELECT 1 FROM manager_approval_consumptions WHERE tenant_id=?1 AND nonce=?2",
-                params![binding.tenant_id.to_string(), binding.nonce],
+                params![tenant_id.to_string(), binding.nonce],
                 |r| r.get(0),
             )
             .optional()?;
@@ -1684,9 +1745,26 @@ impl Store {
             ));
         }
         let id = Uuid::new_v4();
-        let sig_hash = sha256_hex(signature_hex.as_bytes());
-        tx.execute("INSERT INTO manager_approval_consumptions(id,tenant_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,expires_at,consumed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",params![id.to_string(),binding.tenant_id.to_string(),binding.approver_user_id.to_string(),binding.device_id.to_string(),binding.operation_id.to_string(),binding.action,binding.entity_id,binding.payload_sha256,binding.nonce,sig_hash,binding.expires_at.to_rfc3339(),now.to_rfc3339()])?;
-        tx.commit()?;
+        let sig_hash = sha256_hex(grant.signature_hex.as_bytes());
+        tx.execute("INSERT INTO manager_approval_consumptions(id,tenant_id,branch_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,issued_at,expires_at,consumed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![id.to_string(),tenant_id.to_string(),branch_id.to_string(),binding.approver_user_id.to_string(),device_id.to_string(),operation_id.to_string(),action,entity_id,payload_sha256,binding.nonce,sig_hash,binding.issued_at.to_rfc3339(),binding.expires_at.to_rfc3339(),now.to_rfc3339()])?;
+        Self::append_audit(
+            tx,
+            tenant_id,
+            device_id,
+            binding.approver_user_id,
+            "MANAGER_APPROVAL_CONSUMED",
+            "manager_approval",
+            &id.to_string(),
+            &serde_json::json!({
+                "action": action,
+                "branch_id": branch_id,
+                "entity_id": entity_id,
+                "operation_id": operation_id,
+                "payload_sha256": payload_sha256
+            })
+            .to_string(),
+            now,
+        )?;
         Ok(id)
     }
     pub fn rotate_local_device_credential(
@@ -2594,6 +2672,16 @@ impl Store {
     }
 
     pub fn refund(&mut self, req: RefundRequest) -> Result<RefundResult, StoreError> {
+        self.refund_authorized(req, false, None, None)
+    }
+
+    pub fn refund_authorized(
+        &mut self,
+        req: RefundRequest,
+        manager_approval_required: bool,
+        approval_secret: Option<&[u8]>,
+        approval: Option<&ManagerApprovalGrant>,
+    ) -> Result<RefundResult, StoreError> {
         let request_sha256 = Self::refund_request_sha256(&req)?;
         if let Some(existing) =
             self.load_idempotent_result(req.tenant_id, req.operation_id, "REFUND", &request_sha256)?
@@ -2615,6 +2703,28 @@ impl Store {
             req.user_id,
             "sale.refund",
         )?;
+        if manager_approval_required {
+            let secret = approval_secret.ok_or(StoreError::Authorization(
+                "manager approval credential is required",
+            ))?;
+            let grant = approval.ok_or(StoreError::Authorization(
+                "manager approval is required",
+            ))?;
+            Self::consume_manager_approval_tx(
+                &tx,
+                secret,
+                grant,
+                "manager.approve",
+                req.tenant_id,
+                req.branch_id,
+                req.device_id,
+                req.operation_id,
+                "sale.refund",
+                &req.sale_id.to_string(),
+                &request_sha256,
+                req.now,
+            )?;
+        }
         let sale_scope: Option<(String, String, String)> = tx
             .query_row(
                 "SELECT tenant_id,branch_id,status FROM sales WHERE id=?1",
@@ -2931,6 +3041,16 @@ impl Store {
         &mut self,
         req: CashMovementRequest,
     ) -> Result<CashMovementResult, StoreError> {
+        self.record_cash_movement_authorized(req, false, None, None)
+    }
+
+    pub fn record_cash_movement_authorized(
+        &mut self,
+        req: CashMovementRequest,
+        manager_approval_required: bool,
+        approval_secret: Option<&[u8]>,
+        approval: Option<&ManagerApprovalGrant>,
+    ) -> Result<CashMovementResult, StoreError> {
         let request_sha256 = Self::cash_movement_request_sha256(&req)?;
         if let Some(existing) = self.load_idempotent_result(
             req.tenant_id,
@@ -2966,6 +3086,28 @@ impl Store {
             req.user_id,
             req.kind.permission(),
         )?;
+        if manager_approval_required {
+            let secret = approval_secret.ok_or(StoreError::Authorization(
+                "manager approval credential is required",
+            ))?;
+            let grant = approval.ok_or(StoreError::Authorization(
+                "manager approval is required",
+            ))?;
+            Self::consume_manager_approval_tx(
+                &tx,
+                secret,
+                grant,
+                "manager.approve",
+                req.tenant_id,
+                req.branch_id,
+                req.device_id,
+                req.operation_id,
+                "cash.movement",
+                &req.cash_session_id.to_string(),
+                &request_sha256,
+                req.now,
+            )?;
+        }
         let ok:Option<i32>=tx.query_row("SELECT 1 FROM cash_sessions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND status='OPEN'",params![req.cash_session_id.to_string(),req.tenant_id.to_string(),req.branch_id.to_string()],|r|r.get(0)).optional()?;
         if ok.is_none() {
             return Err(StoreError::Authorization(
@@ -3213,7 +3355,7 @@ impl Store {
         Self::assert_permission(&tx, req.tenant_id, req.branch_id, req.user_id, "sale.void")?;
         let payload_sha =
             Self::void_sale_payload_sha256(req.sale_id, req.cash_session_id, &req.reason);
-        let approval_ok:Option<i32>=tx.query_row("SELECT 1 FROM manager_approval_consumptions WHERE id=?1 AND tenant_id=?2 AND device_id=?3 AND operation_id=?4 AND action='sale.void' AND entity_id=?5 AND payload_sha256=?6",params![req.approval_ref.to_string(),req.tenant_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),req.sale_id.to_string(),payload_sha],|r|r.get(0)).optional()?;
+        let approval_ok:Option<i32>=tx.query_row("SELECT 1 FROM manager_approval_consumptions WHERE id=?1 AND tenant_id=?2 AND branch_id=?3 AND device_id=?4 AND operation_id=?5 AND action='sale.void' AND entity_id=?6 AND payload_sha256=?7",params![req.approval_ref.to_string(),req.tenant_id.to_string(),req.branch_id.to_string(),req.device_id.to_string(),req.operation_id.to_string(),req.sale_id.to_string(),payload_sha],|r|r.get(0)).optional()?;
         if approval_ok.is_none() {
             return Err(StoreError::Authorization(
                 "void manager approval does not match exact operation",
@@ -5097,6 +5239,9 @@ impl Store {
         );
         Ok(sha256_hex(&serde_json::to_vec(&normalized)?))
     }
+    pub fn refund_approval_payload_sha256(req: &RefundRequest) -> Result<String, StoreError> {
+        Self::refund_request_sha256(req)
+    }
     fn cash_movement_request_sha256(req: &CashMovementRequest) -> Result<String, StoreError> {
         let normalized = (
             "CASH_MOVEMENT:v1",
@@ -5110,6 +5255,11 @@ impl Store {
             req.reason.as_deref().map(str::trim),
         );
         Ok(sha256_hex(&serde_json::to_vec(&normalized)?))
+    }
+    pub fn cash_movement_approval_payload_sha256(
+        req: &CashMovementRequest,
+    ) -> Result<String, StoreError> {
+        Self::cash_movement_request_sha256(req)
     }
     fn close_cash_session_request_sha256(
         req: &CloseCashSessionRequest,

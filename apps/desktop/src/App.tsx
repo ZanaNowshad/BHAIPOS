@@ -1,10 +1,12 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
+import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type ManagerApprovalCredentials, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
 import { adminApi, type ConfigureOfflinePolicy, type DiagnosticSnapshot, type OfflinePolicyDecision, type OfflinePolicyDetail, type OperationalDiagnostics, type RestorePreview } from './api/admin';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
 type Phase = 'loading'|'setup'|'login'|'policy-recovery'|'cashier'|'admin'|'diagnostics';
 type Tender = Payment['kind'];
+type CashMovementKind = 'PAID_IN'|'PAID_OUT'|'SAFE_DROP'|'NO_SALE'|'PETTY_CASH';
+type ManagerApprovalChallenge = {title:string;detail:string;approve:(credentials:ManagerApprovalCredentials)=>Promise<void>};
 
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
@@ -39,8 +41,10 @@ export function App() {
   const [held,setHeld]=useState<HeldCart[]|null>(null);
   const [refundSale,setRefundSale]=useState<RefundableSale|null>(null);
   const [failedPrints,setFailedPrints]=useState<FailedPrintJob[]|null>(null);
+  const [cashControlOpen,setCashControlOpen]=useState(false);
   const [lastSale,setLastSale]=useState<CheckoutResult|null>(null);
-  const {inputRef,restoreFocus}=useBarcodeFocus(phase==='cashier'&&!busy&&held===null&&refundSale===null&&failedPrints===null);
+  const [managerChallenge,setManagerChallenge]=useState<ManagerApprovalChallenge|null>(null);
+  const {inputRef,restoreFocus}=useBarcodeFocus(phase==='cashier'&&!busy&&held===null&&refundSale===null&&failedPrints===null&&!cashControlOpen&&managerChallenge===null);
 
   useEffect(() => {
     posApi.health().then(health => {setPhase(health.initialized?'login':'setup');setNotice(health.ready?'Offline database ready':'Database integrity check failed');}).catch(error => {setNotice(message(error));setPhase('login');});
@@ -175,6 +179,19 @@ export function App() {
     finally{setBusy(false);}
   }
 
+  async function recordCashMovement(kind:CashMovementKind,amountFils:number,reason:string){
+    const request={operationId:crypto.randomUUID(),kind,amountFils,reason:reason.trim()||undefined};
+    const label=kind.replaceAll('_',' ').toLowerCase();
+    try{
+      await posApi.recordCashMovement(request);
+      setCashControlOpen(false);setNotice(`${label} recorded with immutable cash evidence`);
+    }catch(error){
+      const detail=message(error);
+      if(!detail.includes('manager approval is required'))throw error;
+      setManagerChallenge({title:`Approve ${label}`,detail:`Approve ${kind==='NO_SALE'?'a no-sale drawer opening':`${formatBhd(fils(amountFils))} BHD`} for this exact cash event. This approval expires in two minutes.`,approve:async credentials=>{await posApi.recordCashMovement({...request,managerApproval:credentials});setManagerChallenge(null);setCashControlOpen(false);setNotice(`Manager-approved ${label} recorded`);}});
+    }
+  }
+
   async function refundLine(sale:RefundableSale,line:RefundableSale['lines'][number]){
     const entered=window.prompt(`Return quantity for ${line.product_name}`,(line.remaining_quantity/1000).toFixed(3)); if (entered===null) return;
     try{
@@ -186,8 +203,15 @@ export function App() {
       if (tender==='Cash'&&!cashSessionId) throw new Error('Open a cash session before issuing a cash refund');
       const reason=window.prompt('Refund reason','Customer return'); if (!reason?.trim()) throw new Error('A refund reason is required');
       const payments:Payment[]=quote.total===0?[]:[{kind:tender,amountFils:quote.total}];
-      const committed=await posApi.refund({operationId:crypto.randomUUID(),saleId:sale.sale_id,reason:reason.trim(),lines,payments});
-      setRefundSale(null); setNotice(`Refund committed · ${formatBhd(fils(committed.total))} BHD`);
+      const request={operationId:crypto.randomUUID(),saleId:sale.sale_id,reason:reason.trim(),lines,payments};
+      try{
+        const committed=await posApi.refund(request);
+        setRefundSale(null);setNotice(`Refund committed · ${formatBhd(fils(committed.total))} BHD`);
+      }catch(error){
+        const detail=message(error);
+        if(!detail.includes('manager approval is required'))throw error;
+        setManagerChallenge({title:'Approve refund',detail:`Approve ${formatBhd(fils(quote.total))} BHD for receipt ${sale.receipt_number}. This approval applies only to this exact refund and expires in two minutes.`,approve:async credentials=>{const committed=await posApi.refund({...request,managerApproval:credentials});setManagerChallenge(null);setRefundSale(null);setNotice(`Manager-approved refund committed · ${formatBhd(fils(committed.total))} BHD`);}});
+      }
     }catch(error){setNotice(message(error));}finally{restoreFocus();}
   }
 
@@ -213,7 +237,7 @@ export function App() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0025</span></div>
+      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0026</span></div>
       <div className="status"><span className="dot"/>{notice}</div>
       <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}{canViewDiagnostics&&<button onClick={showDiagnostics}>Diagnostics</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
     </header>
@@ -225,7 +249,7 @@ export function App() {
         <div className="lines">{cart.lines.length===0?<div className="empty-cart">Scan an item to begin</div>:cart.lines.map(line=><button key={line.id} className={`line ${selected===line.id?'selected':''}`} onClick={()=>{setSelected(line.id);restoreFocus();}}>
           <span className="product"><b>{line.name}</b><small>{line.barcode??line.sku}</small></span><span>{(line.quantity/1000).toFixed(3)}</span><span>{formatBhd(fils(line.unit_price))}</span><strong>{formatBhd(fils(line.gross))}</strong>
         </button>)}</div>
-        <div className="action-grid"><button disabled>Qty</button><button disabled>Discount</button><button disabled>Price Override</button><button disabled>Remove</button><button disabled>Customer</button><button disabled>Note</button><button onClick={holdCurrent}>Hold Cart</button><button onClick={showHeld}>Held Carts</button><button onClick={showRefund}>Refund</button><button disabled>Delivery</button><button onClick={showPrintRecovery}>Reprint</button><button disabled>Drawer</button></div>
+        <div className="action-grid"><button disabled>Qty</button><button disabled>Discount</button><button disabled>Price Override</button><button disabled>Remove</button><button disabled>Customer</button><button disabled>Note</button><button onClick={holdCurrent}>Hold Cart</button><button onClick={showHeld}>Held Carts</button><button onClick={showRefund}>Refund</button><button disabled>Delivery</button><button onClick={showPrintRecovery}>Reprint</button><button disabled={!cashSessionId} onClick={()=>setCashControlOpen(true)}>Cash Control</button></div>
       </section>
       <aside className="checkout-panel">
         <div className="summary"><div><span>Net candidate</span><b>{formatBhd(fils(cart.candidate_subtotal))} BHD</b></div><div><span>VAT candidate</span><b>{formatBhd(fils(cart.candidate_tax))} BHD</b></div><div className="grand"><span>Cart estimate</span><strong>{formatBhd(fils(cart.candidate_total))} BHD</strong></div></div>
@@ -237,9 +261,28 @@ export function App() {
       </aside>
     </main>
     {held!==null&&<div className="modal-backdrop"><section className="shift-modal" role="dialog" aria-modal="true" aria-label="Held carts"><header><h2>Held Carts</h2><button onClick={()=>{setHeld(null);restoreFocus();}}>Close</button></header><div className="held-list">{held.length===0?<p>No held carts</p>:held.map(item=><button key={item.cart_id} onClick={()=>restoreHeld(item.cart_id)}><b>{item.note||'Untitled cart'}</b><small>{item.updated_at}</small></button>)}</div></section></div>}
+    {cashControlOpen&&<CashControlModal onSubmit={recordCashMovement} onCancel={()=>{setCashControlOpen(false);restoreFocus();}} onError={setNotice}/>}
     {refundSale&&<div className="modal-backdrop"><section className="shift-modal" role="dialog" aria-modal="true" aria-label="Refund sale"><header><div><span className="eyebrow">Original receipt</span><h2>{refundSale.receipt_number}</h2></div><button onClick={()=>{setRefundSale(null);restoreFocus();}}>Close</button></header><p className="recalc-note">Values come from the immutable sale snapshot. Select one line for this refund.</p><div className="recovery-list">{refundSale.lines.filter(line=>line.remaining_quantity>0).map(line=><button key={line.sale_line_id} onClick={()=>refundLine(refundSale,line)}><span><b>{line.product_name}</b><small>Remaining {(line.remaining_quantity/1000).toFixed(3)}</small></span><strong>{formatBhd(fils(line.refundable_total))} BHD</strong></button>)}</div></section></div>}
+    {managerChallenge&&<ManagerApprovalModal challenge={managerChallenge} onCancel={()=>{setManagerChallenge(null);restoreFocus();}} onError={setNotice}/>}
     {failedPrints!==null&&<div className="modal-backdrop"><section className="shift-modal" role="dialog" aria-modal="true" aria-label="Print recovery"><header><div><span className="eyebrow">Asynchronous receipt printing</span><h2>Failed Prints</h2></div><button onClick={()=>{setFailedPrints(null);restoreFocus();}}>Close</button></header><div className="recovery-list">{failedPrints.length===0?<p>No failed print jobs</p>:failedPrints.map(job=><button key={job.print_job_id} onClick={()=>retryPrint(job.print_job_id)}><span><b>{job.receipt_number??job.document_type}</b><small>{job.last_error} · attempt {job.attempts}</small></span><strong>Retry</strong></button>)}</div></section></div>}
   </div>;
+}
+
+function ManagerApprovalModal({challenge,onCancel,onError}:{challenge:ManagerApprovalChallenge;onCancel:()=>void;onError:(value:string)=>void}){
+  const [employeeNo,setEmployeeNo]=useState('');
+  const [pin,setPin]=useState('');
+  const [busy,setBusy]=useState(false);
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{await challenge.approve({employeeNo,pin});}catch(error){setPin('');onError(message(error));}finally{setBusy(false);}}
+  return <div className="modal-backdrop"><section className="shift-modal manager-approval-modal" role="dialog" aria-modal="true" aria-label={challenge.title}><header><div><span className="eyebrow">Action-bound single-use authority</span><h2>{challenge.title}</h2></div><button disabled={busy} onClick={onCancel}>Cancel</button></header><p>{challenge.detail}</p><form onSubmit={submit}><label>Manager employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus autoComplete="username" required/></label><label>Manager PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" autoComplete="off" required/></label><button className="primary" disabled={busy}>{busy?'Verifying and committing…':'Approve exact action'}</button></form><small>The PIN is verified inside the trusted local service and is not stored in the approval record.</small></section></div>;
+}
+
+function CashControlModal({onSubmit,onCancel,onError}:{onSubmit:(kind:CashMovementKind,amountFils:number,reason:string)=>Promise<void>;onCancel:()=>void;onError:(value:string)=>void}){
+  const [kind,setKind]=useState<CashMovementKind>('PAID_IN');
+  const [amount,setAmount]=useState('');
+  const [reason,setReason]=useState('');
+  const [busy,setBusy]=useState(false);
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const amountFils=kind==='NO_SALE'?0:parseBhd(amount);if(kind!=='NO_SALE'&&amountFils<=0)throw new Error('Cash movement amount must be positive');if(kind!=='NO_SALE'&&!reason.trim())throw new Error('A reason is required');await onSubmit(kind,amountFils,reason);}catch(error){onError(message(error));}finally{setBusy(false);}}
+  return <div className="modal-backdrop"><section className="shift-modal cash-control-modal" role="dialog" aria-modal="true" aria-label="Cash control"><header><div><span className="eyebrow">Open cash session</span><h2>Cash Control</h2></div><button disabled={busy} onClick={onCancel}>Cancel</button></header><form onSubmit={submit}><label>Movement<select value={kind} onChange={event=>setKind(event.target.value as CashMovementKind)}><option value="PAID_IN">Paid in</option><option value="PAID_OUT">Paid out</option><option value="SAFE_DROP">Safe drop</option><option value="PETTY_CASH">Petty cash</option><option value="NO_SALE">No-sale drawer open</option></select></label>{kind!=='NO_SALE'&&<label>Amount (BHD)<input value={amount} onChange={event=>setAmount(event.target.value)} inputMode="decimal" placeholder="0.000" autoFocus required/></label>}<label>Reason<input value={reason} onChange={event=>setReason(event.target.value)} placeholder={kind==='NO_SALE'?'Optional note':'Required operational reason'} required={kind!=='NO_SALE'}/></label><button className="primary" disabled={busy}>{busy?'Recording…':'Record cash event'}</button></form><small>Cash events are immutable, idempotent, attributed to this user and terminal, and included in shift reconciliation.</small></section></div>;
 }
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}

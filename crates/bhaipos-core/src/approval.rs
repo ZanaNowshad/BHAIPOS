@@ -1,4 +1,4 @@
-use crate::{DeviceId, OperationId, TenantId, UserId};
+use crate::{BranchId, DeviceId, OperationId, TenantId, UserId};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,7 @@ use sha2::Sha256;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApprovalBinding {
     pub tenant_id: TenantId,
+    pub branch_id: BranchId,
     pub approver_user_id: UserId,
     pub device_id: DeviceId,
     pub operation_id: OperationId,
@@ -14,6 +15,7 @@ pub struct ApprovalBinding {
     pub entity_id: String,
     pub payload_sha256: String,
     pub nonce: String,
+    pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -29,7 +31,11 @@ pub fn verify_approval(
     signature_hex: &str,
     now: DateTime<Utc>,
 ) -> bool {
-    if now > binding.expires_at {
+    if now < binding.issued_at
+        || now > binding.expires_at
+        || binding.expires_at <= binding.issued_at
+        || binding.expires_at - binding.issued_at > chrono::Duration::minutes(5)
+    {
         return false;
     }
     let sig = match hex::decode(signature_hex) {
