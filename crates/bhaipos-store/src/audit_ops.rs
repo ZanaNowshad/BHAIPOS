@@ -26,12 +26,9 @@ impl Store {
             context.device_id,
             actor_user_id,
         ))?);
-        if let Some(result) = self.load_store_operation(
-            context.tenant_id,
-            operation_id,
-            "AUDIT_VERIFY",
-            &digest,
-        )? {
+        if let Some(result) =
+            self.load_store_operation(context.tenant_id, operation_id, "AUDIT_VERIFY", &digest)?
+        {
             return Ok(result);
         }
         let tx = self
@@ -66,11 +63,18 @@ impl Store {
         } else {
             let existing: Option<String> = tx.query_row("SELECT id FROM operational_alerts WHERE tenant_id=?1 AND branch_id=?2 AND alert_type='SECURITY_EVENT' AND entity_type='device' AND entity_id=?3 AND status NOT IN ('RESOLVED','DISMISSED') LIMIT 1",params![context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string()],|row|row.get(0)).optional()?;
             let id = existing.unwrap_or_else(|| Uuid::new_v4().to_string());
-            if !tx.query_row("SELECT EXISTS(SELECT 1 FROM operational_alerts WHERE id=?1)",params![id],|row|row.get::<_,bool>(0))? {
+            if !tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM operational_alerts WHERE id=?1)",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )? {
                 tx.execute("INSERT INTO operational_alerts(id,tenant_id,branch_id,severity,alert_type,status,entity_type,entity_id,title,details_json,created_at) VALUES(?1,?2,?3,'CRITICAL','SECURITY_EVENT','NEW','device',?4,'Audit chain verification failed',?5,?6)",params![id,context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),serde_json::to_string(&serde_json::json!({"event_count":event_count,"verification_operation_id":operation_id}))?,now.to_rfc3339()])?;
                 tx.execute("INSERT INTO operational_alert_events(id,tenant_id,alert_id,branch_id,operation_id,event_type,previous_status,new_status,device_id,entered_by_user_id,note,created_at) VALUES(?1,?2,?3,?4,?5,'CREATED',NULL,'NEW',?6,?7,'Audit chain verification failed; preserve database and escalate',?8)",params![Uuid::new_v4().to_string(),context.tenant_id.to_string(),id,context.branch_id.to_string(),OperationId::new().to_string(),context.device_id.to_string(),actor_user_id.to_string(),now.to_rfc3339()])?;
             }
-            Some(Uuid::parse_str(&id).map_err(|_| StoreError::Validation("invalid alert identity".into()))?)
+            Some(
+                Uuid::parse_str(&id)
+                    .map_err(|_| StoreError::Validation("invalid alert identity".into()))?,
+            )
         };
         let verification_id = Uuid::new_v4();
         tx.execute("INSERT INTO audit_verification_runs(id,tenant_id,branch_id,device_id,actor_user_id,operation_id,chain_valid,event_count,verified_head_hash,alert_id,verified_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![verification_id.to_string(),context.tenant_id.to_string(),context.branch_id.to_string(),context.device_id.to_string(),actor_user_id.to_string(),operation_id.to_string(),chain_valid,event_count,verified_head_hash,alert_id.map(|id|id.to_string()),now.to_rfc3339()])?;
@@ -83,9 +87,27 @@ impl Store {
             verified_at: now.to_rfc3339(),
         };
         if chain_valid {
-            Self::append_audit(&tx,context.tenant_id,context.device_id,actor_user_id,"AUDIT_CHAIN_VERIFIED","device",&context.device_id.to_string(),&serde_json::to_string(&result)?,now)?;
+            Self::append_audit(
+                &tx,
+                context.tenant_id,
+                context.device_id,
+                actor_user_id,
+                "AUDIT_CHAIN_VERIFIED",
+                "device",
+                &context.device_id.to_string(),
+                &serde_json::to_string(&result)?,
+                now,
+            )?;
         }
-        Self::record_store_operation(&tx,context.tenant_id,operation_id,"AUDIT_VERIFY",&digest,&result,now)?;
+        Self::record_store_operation(
+            &tx,
+            context.tenant_id,
+            operation_id,
+            "AUDIT_VERIFY",
+            &digest,
+            &result,
+            now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
