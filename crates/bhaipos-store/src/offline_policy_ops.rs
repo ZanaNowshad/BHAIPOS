@@ -86,9 +86,7 @@ impl Store {
                     let decision: String = row.get(1)?;
                     let decision = match decision.as_str() {
                         "ALLOW" => OfflinePolicyDecision::Allow,
-                        "REQUIRE_MANAGER_APPROVAL" => {
-                            OfflinePolicyDecision::RequireManagerApproval
-                        }
+                        "REQUIRE_MANAGER_APPROVAL" => OfflinePolicyDecision::RequireManagerApproval,
                         _ => OfflinePolicyDecision::Deny,
                     };
                     Ok(OfflinePolicyRuleSummary {
