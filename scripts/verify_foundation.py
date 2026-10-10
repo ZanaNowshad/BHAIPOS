@@ -28,6 +28,7 @@ UPGRADE_0023=ROOT/'migrations/0023_diagnostics.sql'
 UPGRADE_0024=ROOT/'migrations/0024_diagnostic_exports.sql'
 UPGRADE_0025=ROOT/'migrations/0025_offline_authorization_policy.sql'
 UPGRADE_0026=ROOT/'migrations/0026_manager_approval_evidence.sql'
+UPGRADE_0027=ROOT/'migrations/0027_user_security_recovery.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -111,6 +112,7 @@ def apply_schema(con, include_payload_binding=True):
         for col,ddl in approval_upgrades.items():
             if col not in approval_cols: con.execute(ddl)
         con.executescript(UPGRADE_0026.read_text())
+        con.executescript(UPGRADE_0027.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -128,6 +130,8 @@ con.executescript(UPGRADE_0024.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='diagnostics.export'",(upgrade_role,)).fetchone()
 con.executescript(UPGRADE_0025.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='offline_policy.manage'",(upgrade_role,)).fetchone()
+con.executescript(UPGRADE_0027.read_text())
+assert con.execute("select 1 from role_permissions where role_id=? and permission_code='employee.security.manage'",(upgrade_role,)).fetchone()
 
 # The additive binding migration must preserve historical unbound results.
 # Runtime replay of these rows fails closed because their request payload is
@@ -209,6 +213,10 @@ approval=uid()
 con.execute("insert into manager_approval_consumptions(id,tenant_id,branch_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,issued_at,expires_at,consumed_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(approval,ta,ba,user,device,uid(),'sale.refund',uid(),'a'*64,uid(),'b'*64,now,'2026-09-29T01:02:00+00:00',now))
 must_fail(lambda: con.execute("update manager_approval_consumptions set action='sale.void' where id=?",(approval,)), 'IMMUTABLE')
 must_fail(lambda: con.execute("insert into manager_approval_consumptions(id,tenant_id,branch_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,issued_at,expires_at,consumed_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(uid(),ta,bb,user,device,uid(),'sale.refund',uid(),'a'*64,uid(),'b'*64,now,'2026-09-29T01:02:00+00:00',now)), 'MANAGER_APPROVAL_SCOPE_VIOLATION')
+security_event=uid()
+con.execute("insert into user_security_events(id,tenant_id,branch_id,target_user_id,actor_user_id,device_id,operation_id,event_type,request_pin_hash,previous_status,new_status,reason,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",(security_event,ta,ba,user,user,device,uid(),'PIN_RESET','$argon2id$redacted-test-verifier','ACTIVE','ACTIVE','Credential recovery evidence',now))
+must_fail(lambda: con.execute("update user_security_events set reason='rewritten' where id=?",(security_event,)), 'IMMUTABLE')
+must_fail(lambda: con.execute("insert into user_security_events(id,tenant_id,branch_id,target_user_id,actor_user_id,device_id,operation_id,event_type,request_pin_hash,previous_status,new_status,reason,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",(uid(),ta,bb,user,user,device,uid(),'ACCOUNT_UNLOCKED',None,'LOCKED','ACTIVE','bad scope',now)), 'USER_SECURITY_SCOPE_VIOLATION')
 con.executescript(UPGRADE_0009.read_text())
 assert con.execute("select paper_width_mm,characters_per_line,drawer_pulse_policy from printer_profiles where device_id=?",(device,)).fetchone()==(80,48,'CASH_SALE')
 must_fail(lambda: con.execute("insert into printer_profiles(id,tenant_id,branch_id,device_id,friendly_name,transport,paper_width_mm,characters_per_line,character_encoding,cut_mode,drawer_pulse_policy,created_at,updated_at) values(?,?,?,?,?,'WINDOWS_SPOOLER',80,48,'ASCII','PARTIAL','NEVER',?,?)",(uid(),tb,bb,device,'bad',now,now)), 'TENANT_SCOPE_VIOLATION')
@@ -338,7 +346,7 @@ must_fail(
 )
 
 # Source policy scans: authoritative Rust money/store cannot contain floating money types.
-rust_authoritative=(ROOT/'crates/bhaipos-core/src/money.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-core/src/tax.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/store.rs').read_text()
+rust_authoritative=(ROOT/'crates/bhaipos-core/src/money.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-core/src/tax.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/store.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/identity_ops.rs').read_text()
 assert not re.search(r'\bf(?:32|64)\b', rust_authoritative), 'floating type found in authoritative financial source'
 assert 'transaction_with_behavior(TransactionBehavior::Immediate)' in rust_authoritative
 assert 'idempotency_results' in rust_authoritative
@@ -376,6 +384,7 @@ required_commands={
     'configure_backup_schedule','get_operational_diagnostics',
     'list_diagnostic_snapshots','capture_redacted_diagnostics',
     'get_active_offline_policy','configure_offline_policy',
+    'administer_user_security',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -387,10 +396,10 @@ assert 'offline_policy_recovery_only' in desktop_bridge
 assert 'offline_policy_recovery_required' in desktop_bridge
 assert 'fn require_authenticated_session' in desktop_bridge
 assert 'selling and operational commands are locked' in desktop_bridge
-for offline_action in ['"LOGIN"','"SALE_CHECKOUT"','"CUSTOMER_CREDIT"','"REFUND"','"CASH_EVENT"']:
+for offline_action in ['"LOGIN"','"SALE_CHECKOUT"','"CUSTOMER_CREDIT"','"REFUND"','"CASH_EVENT"','"USER_SECURITY"']:
     assert offline_action in desktop_bridge, offline_action
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0026_manager_approval_evidence"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0027_user_security_recovery"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')

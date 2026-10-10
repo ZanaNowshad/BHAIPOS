@@ -10,6 +10,7 @@ const OFFLINE_ACTIONS: &[&str] = &[
     "CUSTOMER_CREDIT",
     "STOCK_ADJUSTMENT",
     "SUPPLIER_PAYMENT",
+    "USER_SECURITY",
 ];
 
 impl Store {

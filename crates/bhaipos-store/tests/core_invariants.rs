@@ -10,6 +10,7 @@ use bhaipos_store::{
     LocalBootstrapRequest, ManagerApprovalGrant, NewProduct, OfflineActionRuleInput,
     OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput,
     RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
+    UserSecurityAction, UserSecurityRequest,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -86,6 +87,7 @@ fn fixture() -> Fixture {
         ("delivery.collect", "Record delivery collections"),
         ("delivery.settle", "Settle courier cash custody"),
         ("employee.manage", "Manage employee records"),
+        ("employee.security.manage", "Manage employee credentials"),
         ("attendance.clock", "Record attendance events"),
         ("attendance.manage", "Resolve attendance exceptions"),
         ("attendance.view", "View attendance reports"),
@@ -206,6 +208,193 @@ fn fixture() -> Fixture {
         product,
         cash_session,
     }
+}
+
+#[test]
+fn administrative_user_security_is_scoped_idempotent_and_immutable() {
+    let mut f = fixture();
+    let now = t("2026-09-29T02:00:00Z");
+    let target = UserId::new();
+    f.store
+        .create_user(
+            target,
+            f.tenant,
+            "Recovery Target",
+            &hash_pin("2468").unwrap(),
+            now,
+        )
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE users SET employee_no='EMP-RECOVERY' WHERE id=?1",
+            params![target.to_string()],
+        )
+        .unwrap();
+    let role_id: String = f
+        .store
+        .connection()
+        .query_row(
+            "SELECT role_id FROM user_roles WHERE user_id=?1 AND branch_id=?2",
+            params![f.user.to_string(), f.branch.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "INSERT INTO user_roles(user_id,role_id,branch_id) VALUES(?1,?2,?3)",
+            params![target.to_string(), role_id, f.branch.to_string()],
+        )
+        .unwrap();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let operation_id = OperationId::new();
+    let reset = UserSecurityRequest {
+        context,
+        actor_user_id: f.user,
+        operation_id,
+        target_employee_no: "EMP-RECOVERY".into(),
+        action: UserSecurityAction::ResetPin,
+        new_pin: Some("9753".into()),
+        reason: "Verified owner credential recovery".into(),
+        now,
+    };
+    let first = f
+        .store
+        .administer_user_security(reset.clone())
+        .unwrap();
+    assert_eq!(first.event_type, "PIN_RESET");
+    assert_eq!(first.previous_status, "ACTIVE");
+    assert_eq!(first.new_status, "ACTIVE");
+    f.store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "9753", now, 5, 15)
+        .unwrap();
+    f.store
+        .rotate_local_device_credential(
+            context,
+            f.user,
+            "rotated-device-secret-0123456789",
+            now,
+        )
+        .unwrap();
+    assert_eq!(
+        first,
+        f.store
+            .administer_user_security(reset)
+            .unwrap()
+    );
+    let mismatch = f.store.administer_user_security(
+        UserSecurityRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id,
+            target_employee_no: "EMP-RECOVERY".into(),
+            action: UserSecurityAction::ResetPin,
+            new_pin: Some("8642".into()),
+            reason: "Verified owner credential recovery".into(),
+            now,
+        },
+    );
+    assert!(matches!(mismatch, Err(StoreError::Conflict(_))));
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM user_security_events WHERE tenant_id=?1 AND operation_id=?2",
+                params![f.tenant.to_string(), operation_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    f.store
+        .connection()
+        .execute(
+            "UPDATE users SET status='LOCKED',locked_until=?2 WHERE id=?1",
+            params![target.to_string(), (now + chrono::Duration::hours(1)).to_rfc3339()],
+        )
+        .unwrap();
+    f.store
+        .administer_user_security(
+            UserSecurityRequest {
+                context,
+                actor_user_id: f.user,
+                operation_id: OperationId::new(),
+                target_employee_no: "EMP-RECOVERY".into(),
+                action: UserSecurityAction::ResetPin,
+                new_pin: Some("1357".into()),
+                reason: "Reset while preserving lock review".into(),
+                now,
+            },
+        )
+        .unwrap();
+    assert!(f
+        .store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .is_err());
+    f.store
+        .administer_user_security(
+            UserSecurityRequest {
+                context,
+                actor_user_id: f.user,
+                operation_id: OperationId::new(),
+                target_employee_no: "EMP-RECOVERY".into(),
+                action: UserSecurityAction::Unlock,
+                new_pin: None,
+                reason: "Lockout reviewed by owner".into(),
+                now,
+            },
+        )
+        .unwrap();
+    f.store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .unwrap();
+    f.store
+        .administer_user_security(
+            UserSecurityRequest {
+                context,
+                actor_user_id: f.user,
+                operation_id: OperationId::new(),
+                target_employee_no: "EMP-RECOVERY".into(),
+                action: UserSecurityAction::Suspend,
+                new_pin: None,
+                reason: "Employment access suspended".into(),
+                now,
+            },
+        )
+        .unwrap();
+    assert!(f
+        .store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .is_err());
+    f.store
+        .administer_user_security(
+            UserSecurityRequest {
+                context,
+                actor_user_id: f.user,
+                operation_id: OperationId::new(),
+                target_employee_no: "EMP-RECOVERY".into(),
+                action: UserSecurityAction::Reactivate,
+                new_pin: None,
+                reason: "Employment access restored".into(),
+                now,
+            },
+        )
+        .unwrap();
+    f.store
+        .authenticate_employee_pin(f.tenant, "EMP-RECOVERY", "1357", now, 5, 15)
+        .unwrap();
+    let immutable = f.store.connection().execute(
+        "UPDATE user_security_events SET reason='rewritten' WHERE id=?1",
+        params![first.event_id.to_string()],
+    );
+    assert!(immutable.is_err());
 }
 
 #[test]

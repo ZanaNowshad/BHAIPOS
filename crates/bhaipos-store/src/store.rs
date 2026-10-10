@@ -1,5 +1,5 @@
 use bhaipos_core::{
-    compute_audit_hash, hash_pin, hash_secret, price_times_quantity, sha256_hex,
+    compute_audit_hash, hash_pin, hash_secret, pin_hash_needs_upgrade, price_times_quantity, sha256_hex,
     sign_sync_mutation, verify_approval, verify_pin, verify_secret, verify_sync_mutation,
     ApprovalBinding, AuditMaterial, BranchId, CartId, DeviceId, Money, OperationId, ProductId,
     QuantityMilli, RegisterId, SaleId, SyncMutationEnvelope, SyncMutationMaterial, TaxCategory,
@@ -29,6 +29,8 @@ mod diagnostics_ops;
 mod expense_ops;
 #[path = "job_ops.rs"]
 mod job_ops;
+#[path = "identity_ops.rs"]
+mod identity_ops;
 #[path = "offline_policy_ops.rs"]
 mod offline_policy_ops;
 #[path = "procurement.rs"]
@@ -67,7 +69,10 @@ const MIGRATION_0024: &str = include_str!("../../../migrations/0024_diagnostic_e
 const MIGRATION_0025: &str =
     include_str!("../../../migrations/0025_offline_authorization_policy.sql");
 const MIGRATION_0026: &str = include_str!("../../../migrations/0026_manager_approval_evidence.sql");
-pub const LATEST_SCHEMA: &str = "0026_manager_approval_evidence";
+const MIGRATION_0027: &str = include_str!("../../../migrations/0027_user_security_recovery.sql");
+pub const LATEST_SCHEMA: &str = "0027_user_security_recovery";
+
+pub use identity_ops::*;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -1206,6 +1211,7 @@ impl Store {
             Self::ensure_column(&self.conn, "manager_approval_consumptions", column, ddl)?;
         }
         self.conn.execute_batch(MIGRATION_0026)?;
+        self.conn.execute_batch(MIGRATION_0027)?;
         Ok(())
     }
     fn ensure_column(
@@ -1368,6 +1374,10 @@ impl Store {
             ("delivery.collect", "Record delivery payment collections"),
             ("delivery.settle", "Reconcile courier cash custody"),
             ("employee.manage", "Manage employee personnel records"),
+            (
+                "employee.security.manage",
+                "Suspend, reactivate, unlock and reset staff credentials",
+            ),
             ("attendance.clock", "Record employee clock and break events"),
             ("attendance.manage", "Resolve attendance exceptions"),
             ("attendance.view", "View attendance reports"),
@@ -1635,10 +1645,19 @@ impl Store {
             failed = 0;
         }
         if verify_pin(&hash, pin) {
-            self.conn.execute(
-                "UPDATE users SET failed_attempts=0,locked_until=NULL,status='ACTIVE' WHERE id=?1",
-                params![user.to_string()],
-            )?;
+            if pin_hash_needs_upgrade(&hash) {
+                let upgraded = hash_pin(pin)
+                    .map_err(|error| StoreError::Validation(error.to_string()))?;
+                self.conn.execute(
+                    "UPDATE users SET pin_hash=?2,failed_attempts=0,locked_until=NULL,status='ACTIVE' WHERE id=?1",
+                    params![user.to_string(), upgraded],
+                )?;
+            } else {
+                self.conn.execute(
+                    "UPDATE users SET failed_attempts=0,locked_until=NULL,status='ACTIVE' WHERE id=?1",
+                    params![user.to_string()],
+                )?;
+            }
             return Ok(());
         }
         let next = failed + 1;
