@@ -55,6 +55,7 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `38083103186` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for bounded offline login/action enforcement merged at `c8ae1ad712395a44b9ea65f09102a1409915d12c`.
 - GitHub Actions run `38082366084` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for trusted offline-policy administration merged at `606789c417d1a8b46ced68edf958091acef8b895`.
 - GitHub Actions run `37998456402` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for durable redacted diagnostic exports and immutable snapshot history.
 - Diagnostic captures require explicit export authority, bind retries to the normalized trusted request, preserve scoped immutable payload/hash evidence, refuse changed-payload replay, and export atomically only to an application-controlled directory. Renderer requests cannot supply authority or output paths.
@@ -88,6 +89,7 @@ Status vocabulary:
 - device secret hash/authentication, credential rotation, suspend/revoke;
 - fail-closed RBAC for checkout/refund/cash-session open;
 - bound HMAC manager approvals and nonce replay prevention;
+- branch- and issue-time-bound approval evidence plus atomic refund/cash-event consumption using the OS-protected terminal secret (working tree; CI pending);
 - barcode classification/weighted EAN parser;
 - persistent cart, hold/restore;
 - exact tender validation, cash change, BenefitPay evidence status;

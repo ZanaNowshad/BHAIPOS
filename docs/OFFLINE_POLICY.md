@@ -34,7 +34,7 @@ The desktop boundary reevaluates policy immediately before these operations:
 | `REFUND` | Refund commit |
 | `CASH_EVENT` | Paid-in, paid-out, safe-drop, no-sale and configured cash movement commit |
 
-`REQUIRE_MANAGER_APPROVAL` currently rejects the protected mutation unless that workflow has integrated a payload-bound single-use manager approval. It never degrades to `ALLOW`. Manager approval integration for refund, cash events and the remaining high-risk actions is still required.
+`REQUIRE_MANAGER_APPROVAL` never degrades to `ALLOW`. Refund and cash-event commands accept a manager employee number and masked PIN only for the exact pending mutation. The trusted service re-authenticates the approver, recomputes the canonical request digest, signs with the OS-protected terminal secret, and consumes branch/device/action/target/payload/operation-bound evidence in the same SQLite transaction as the mutation. A failed mutation rolls the consumption back; an exact lost-response retry returns the prior idempotent result. Remaining high-risk actions still require the same integration.
 
 ## Disconnected-state limitations
 

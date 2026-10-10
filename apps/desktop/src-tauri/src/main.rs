@@ -4,8 +4,8 @@ mod credential_store;
 mod printer;
 
 use bhaipos_core::{
-    render_esc_pos, sha256_hex, CartId, CutMode, DrawerPulsePolicy, EscPosProfile, Money,
-    OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
+    render_esc_pos, sha256_hex, sign_approval, ApprovalBinding, CartId, CutMode, DrawerPulsePolicy,
+    EscPosProfile, Money, OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
@@ -18,11 +18,11 @@ use bhaipos_store::{
     DiagnosticCaptureRequest as StoreDiagnosticCaptureRequest, DiagnosticSnapshotResult,
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
     LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
-    OfflineActionRuleInput, OfflineAuthorizationReason, OfflinePolicyDecision, OfflinePolicyDetail,
-    OfflinePolicyResult, OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics,
-    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
-    RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
-    RestoreResult, Store,
+    ManagerApprovalGrant, OfflineActionRuleInput, OfflineAuthorizationReason,
+    OfflinePolicyDecision, OfflinePolicyDetail, OfflinePolicyResult, OperationalAlertResult,
+    OperationalAlertSummary, OperationalDiagnostics, PaymentInput, RefundLineInput, RefundQuote,
+    RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
+    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -228,6 +228,14 @@ struct RefundRequest {
     reason: String,
     lines: Vec<RefundLineRequest>,
     payments: Vec<PaymentRequest>,
+    manager_approval: Option<ManagerCredentialRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerCredentialRequest {
+    employee_no: String,
+    pin: String,
 }
 
 #[derive(Deserialize)]
@@ -237,6 +245,7 @@ struct CashMovementRequest {
     kind: CashMovementKind,
     amount_fils: i64,
     reason: Option<String>,
+    manager_approval: Option<ManagerCredentialRequest>,
 }
 
 #[derive(Deserialize)]
@@ -329,18 +338,28 @@ fn require_offline_action(
     action_type: &str,
     now: DateTime<Utc>,
 ) -> Result<(), String> {
+    match offline_action_decision(store, session, action_type, now)? {
+        OfflinePolicyDecision::Allow => Ok(()),
+        OfflinePolicyDecision::RequireManagerApproval => Err(format!(
+            "manager approval is required for offline {}",
+            action_type.to_ascii_lowercase().replace('_', " ")
+        )),
+        OfflinePolicyDecision::Deny => unreachable!("denials are returned as errors"),
+    }
+}
+
+fn offline_action_decision(
+    store: &Store,
+    session: AuthenticatedSession,
+    action_type: &str,
+    now: DateTime<Utc>,
+) -> Result<OfflinePolicyDecision, String> {
     let authorization = store
         .offline_authorization(session.terminal, session.user_id, action_type, now)
         .map_err(command_error)?;
     match authorization.decision {
-        OfflinePolicyDecision::Allow => Ok(()),
-        OfflinePolicyDecision::RequireManagerApproval => Err(format!(
-            "manager approval is required for offline {}",
-            authorization
-                .action_type
-                .to_ascii_lowercase()
-                .replace('_', " ")
-        )),
+        decision @ (OfflinePolicyDecision::Allow
+        | OfflinePolicyDecision::RequireManagerApproval) => Ok(decision),
         OfflinePolicyDecision::Deny => Err(format!(
             "offline {} denied: {}",
             authorization
@@ -350,6 +369,51 @@ fn require_offline_action(
             authorization.reason
         )),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_manager_approval(
+    store: &Store,
+    session: AuthenticatedSession,
+    credentials: ManagerCredentialRequest,
+    operation_id: OperationId,
+    action: &str,
+    entity_id: String,
+    payload_sha256: String,
+    now: DateTime<Utc>,
+) -> Result<(String, ManagerApprovalGrant), String> {
+    let approver_user_id = store
+        .authenticate_employee_pin(
+            session.terminal.tenant_id,
+            &credentials.employee_no,
+            &credentials.pin,
+            now,
+            5,
+            15,
+        )
+        .map_err(command_error)?;
+    let secret = credential_store::read_device_secret(session.terminal.device_id.0)?;
+    let binding = ApprovalBinding {
+        tenant_id: session.terminal.tenant_id,
+        branch_id: session.terminal.branch_id,
+        approver_user_id,
+        device_id: session.terminal.device_id,
+        operation_id,
+        action: action.to_owned(),
+        entity_id,
+        payload_sha256,
+        nonce: Uuid::new_v4().to_string(),
+        issued_at: now,
+        expires_at: now + chrono::Duration::minutes(2),
+    };
+    let signature_hex = sign_approval(secret.as_bytes(), &binding);
+    Ok((
+        secret,
+        ManagerApprovalGrant {
+            binding,
+            signature_hex,
+        },
+    ))
 }
 
 fn payments(input: Vec<PaymentRequest>) -> Vec<PaymentInput> {
@@ -817,6 +881,8 @@ fn quote_refund(
 fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundResult, String> {
     let session = require_session(&state)?;
     let now = Utc::now();
+    let operation_id = OperationId(parse_uuid(&request.operation_id, "operation ID")?);
+    let sale_id = SaleId(parse_uuid(&request.sale_id, "sale ID")?);
     let lines = request
         .lines
         .into_iter()
@@ -831,21 +897,45 @@ fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundRe
         .store
         .lock()
         .map_err(|_| "database state poisoned".to_string())?;
-    require_offline_action(&store, session, "REFUND", now)?;
-    store
-        .refund(StoreRefundRequest {
-            tenant_id: session.terminal.tenant_id,
-            branch_id: session.terminal.branch_id,
-            device_id: session.terminal.device_id,
-            user_id: session.user_id,
-            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
-            sale_id: SaleId(parse_uuid(&request.sale_id, "sale ID")?),
-            reason: request.reason,
-            lines,
-            cash_session_id: session.cash_session_id,
-            payments: payments(request.payments),
+    let decision = offline_action_decision(&store, session, "REFUND", now)?;
+    let store_request = StoreRefundRequest {
+        tenant_id: session.terminal.tenant_id,
+        branch_id: session.terminal.branch_id,
+        device_id: session.terminal.device_id,
+        user_id: session.user_id,
+        operation_id,
+        sale_id,
+        reason: request.reason,
+        lines,
+        cash_session_id: session.cash_session_id,
+        payments: payments(request.payments),
+        now,
+    };
+    let approval_required = decision == OfflinePolicyDecision::RequireManagerApproval;
+    let approval = if approval_required {
+        let credentials = request
+            .manager_approval
+            .ok_or_else(|| "manager approval is required for offline refund".to_string())?;
+        Some(build_manager_approval(
+            &store,
+            session,
+            credentials,
+            operation_id,
+            "sale.refund",
+            sale_id.to_string(),
+            Store::refund_approval_payload_sha256(&store_request).map_err(command_error)?,
             now,
-        })
+        )?)
+    } else {
+        None
+    };
+    store
+        .refund_authorized(
+            store_request,
+            approval_required,
+            approval.as_ref().map(|(secret, _)| secret.as_bytes()),
+            approval.as_ref().map(|(_, grant)| grant),
+        )
         .map_err(command_error)
 }
 
@@ -863,20 +953,45 @@ fn record_cash_movement(
         .store
         .lock()
         .map_err(|_| "database state poisoned".to_string())?;
-    require_offline_action(&store, session, "CASH_EVENT", now)?;
-    store
-        .record_cash_movement(StoreCashMovementRequest {
-            tenant_id: session.terminal.tenant_id,
-            branch_id: session.terminal.branch_id,
-            device_id: session.terminal.device_id,
-            user_id: session.user_id,
-            cash_session_id,
-            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
-            kind: request.kind,
-            amount: Money(request.amount_fils),
-            reason: request.reason,
+    let decision = offline_action_decision(&store, session, "CASH_EVENT", now)?;
+    let operation_id = OperationId(parse_uuid(&request.operation_id, "operation ID")?);
+    let store_request = StoreCashMovementRequest {
+        tenant_id: session.terminal.tenant_id,
+        branch_id: session.terminal.branch_id,
+        device_id: session.terminal.device_id,
+        user_id: session.user_id,
+        cash_session_id,
+        operation_id,
+        kind: request.kind,
+        amount: Money(request.amount_fils),
+        reason: request.reason,
+        now,
+    };
+    let approval_required = decision == OfflinePolicyDecision::RequireManagerApproval;
+    let approval = if approval_required {
+        let credentials = request
+            .manager_approval
+            .ok_or_else(|| "manager approval is required for offline cash event".to_string())?;
+        Some(build_manager_approval(
+            &store,
+            session,
+            credentials,
+            operation_id,
+            "cash.movement",
+            cash_session_id.to_string(),
+            Store::cash_movement_approval_payload_sha256(&store_request).map_err(command_error)?,
             now,
-        })
+        )?)
+    } else {
+        None
+    };
+    store
+        .record_cash_movement_authorized(
+            store_request,
+            approval_required,
+            approval.as_ref().map(|(secret, _)| secret.as_bytes()),
+            approval.as_ref().map(|(_, grant)| grant),
+        )
         .map_err(command_error)
 }
 

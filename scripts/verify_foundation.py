@@ -27,6 +27,7 @@ UPGRADE_0022=ROOT/'migrations/0022_backup_retention.sql'
 UPGRADE_0023=ROOT/'migrations/0023_diagnostics.sql'
 UPGRADE_0024=ROOT/'migrations/0024_diagnostic_exports.sql'
 UPGRADE_0025=ROOT/'migrations/0025_offline_authorization_policy.sql'
+UPGRADE_0026=ROOT/'migrations/0026_manager_approval_evidence.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -102,6 +103,14 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0023.read_text())
         con.executescript(UPGRADE_0024.read_text())
         con.executescript(UPGRADE_0025.read_text())
+        approval_cols={r[1] for r in con.execute('PRAGMA table_info(manager_approval_consumptions)')}
+        approval_upgrades={
+            'branch_id':'ALTER TABLE manager_approval_consumptions ADD COLUMN branch_id TEXT REFERENCES branches(id)',
+            'issued_at':'ALTER TABLE manager_approval_consumptions ADD COLUMN issued_at TEXT',
+        }
+        for col,ddl in approval_upgrades.items():
+            if col not in approval_cols: con.execute(ddl)
+        con.executescript(UPGRADE_0026.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -196,6 +205,10 @@ con.execute("insert into devices(id,tenant_id,branch_id,label,status,credential_
 register=uid(); con.execute("insert into registers(id,tenant_id,branch_id,code,name) values(?,?,?,?,?)",(register,ta,ba,'R1','Register 1'))
 con.execute("insert into local_terminal_binding(singleton,tenant_id,branch_id,device_id,register_id,installed_at) values(1,?,?,?,?,?)",(ta,ba,device,register,now))
 must_fail(lambda: con.execute("update local_terminal_binding set device_id=? where singleton=1",(uid(),)), 'IMMUTABLE')
+approval=uid()
+con.execute("insert into manager_approval_consumptions(id,tenant_id,branch_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,issued_at,expires_at,consumed_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(approval,ta,ba,user,device,uid(),'sale.refund',uid(),'a'*64,uid(),'b'*64,now,'2026-09-29T01:02:00+00:00',now))
+must_fail(lambda: con.execute("update manager_approval_consumptions set action='sale.void' where id=?",(approval,)), 'IMMUTABLE')
+must_fail(lambda: con.execute("insert into manager_approval_consumptions(id,tenant_id,branch_id,approver_user_id,device_id,operation_id,action,entity_id,payload_sha256,nonce,signature_sha256,issued_at,expires_at,consumed_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(uid(),ta,bb,user,device,uid(),'sale.refund',uid(),'a'*64,uid(),'b'*64,now,'2026-09-29T01:02:00+00:00',now)), 'MANAGER_APPROVAL_SCOPE_VIOLATION')
 con.executescript(UPGRADE_0009.read_text())
 assert con.execute("select paper_width_mm,characters_per_line,drawer_pulse_policy from printer_profiles where device_id=?",(device,)).fetchone()==(80,48,'CASH_SALE')
 must_fail(lambda: con.execute("insert into printer_profiles(id,tenant_id,branch_id,device_id,friendly_name,transport,paper_width_mm,characters_per_line,character_encoding,cut_mode,drawer_pulse_policy,created_at,updated_at) values(?,?,?,?,?,'WINDOWS_SPOOLER',80,48,'ASCII','PARTIAL','NEVER',?,?)",(uid(),tb,bb,device,'bad',now,now)), 'TENANT_SCOPE_VIOLATION')
@@ -377,7 +390,7 @@ assert 'selling and operational commands are locked' in desktop_bridge
 for offline_action in ['"LOGIN"','"SALE_CHECKOUT"','"CUSTOMER_CREDIT"','"REFUND"','"CASH_EVENT"']:
     assert offline_action in desktop_bridge, offline_action
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0025_offline_authorization_policy"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0026_manager_approval_evidence"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')
