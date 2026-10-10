@@ -14,9 +14,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-five SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 175 application tables created.
-- 271 integrity/security triggers created.
+- All twenty-seven SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 176 application tables created.
+- 275 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -55,6 +55,7 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `38083904854` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for atomic action-bound offline manager approvals merged at `f929dd2f89484cae4ad19a23be26c3481e73285e`.
 - GitHub Actions run `38083103186` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for bounded offline login/action enforcement merged at `c8ae1ad712395a44b9ea65f09102a1409915d12c`.
 - GitHub Actions run `38082366084` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for trusted offline-policy administration merged at `606789c417d1a8b46ced68edf958091acef8b895`.
 - GitHub Actions run `37998456402` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for durable redacted diagnostic exports and immutable snapshot history.
@@ -85,11 +86,11 @@ Status vocabulary:
 
 - integer-fils money with checked aggregation/variance/change arithmetic and deterministic validated basis-point VAT;
 - integer thousandth quantities;
-- Argon2id PIN hash/verification and lockout;
+- explicit Argon2id PIN hash/verification, transparent successful-login hash upgrade, lockout, and branch-scoped idempotent administrator reset/unlock/suspend/reactivate with immutable security evidence (working tree; CI pending);
 - device secret hash/authentication, credential rotation, suspend/revoke;
 - fail-closed RBAC for checkout/refund/cash-session open;
 - bound HMAC manager approvals and nonce replay prevention;
-- branch- and issue-time-bound approval evidence plus atomic refund/cash-event consumption using the OS-protected terminal secret (working tree; CI pending);
+- branch- and issue-time-bound approval evidence plus atomic refund/cash-event consumption using the OS-protected terminal secret;
 - barcode classification/weighted EAN parser;
 - persistent cart, hold/restore;
 - exact tender validation, cash change, BenefitPay evidence status;

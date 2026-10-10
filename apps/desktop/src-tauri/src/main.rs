@@ -23,6 +23,7 @@ use bhaipos_store::{
     OperationalAlertSummary, OperationalDiagnostics, PaymentInput, RefundLineInput, RefundQuote,
     RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
     RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
+    UserSecurityAction, UserSecurityRequest as StoreUserSecurityRequest, UserSecurityResult,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -92,6 +93,7 @@ struct LoginResponse {
     can_export_diagnostics: bool,
     can_view_offline_policy: bool,
     can_manage_offline_policy: bool,
+    can_manage_user_security: bool,
     offline_policy_recovery_required: bool,
 }
 
@@ -133,6 +135,16 @@ struct ConfigureOfflinePolicyCommandRequest {
     max_policy_staleness_minutes: i64,
     authorization_valid_days: i64,
     rules: Vec<OfflinePolicyRuleRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdministerUserSecurityCommandRequest {
+    operation_id: String,
+    target_employee_no: String,
+    action: UserSecurityAction,
+    new_pin: Option<String>,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -555,6 +567,9 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_manage_offline_policy = store
         .user_has_permission(terminal, user_id, "offline_policy.manage")
         .map_err(command_error)?;
+    let can_manage_user_security = store
+        .user_has_permission(terminal, user_id, "employee.security.manage")
+        .map_err(command_error)?;
     let login_authorization = store
         .offline_authorization(terminal, user_id, "LOGIN", now)
         .map_err(command_error)?;
@@ -601,6 +616,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         can_export_diagnostics,
         can_view_offline_policy,
         can_manage_offline_policy,
+        can_manage_user_security,
         offline_policy_recovery_required,
     })
 }
@@ -632,6 +648,32 @@ fn rotate_local_device_credential(state: State<'_, AppState>) -> Result<i64, Str
             Err(command_error(error))
         }
     }
+}
+
+#[tauri::command]
+fn administer_user_security(
+    state: State<'_, AppState>,
+    request: AdministerUserSecurityCommandRequest,
+) -> Result<UserSecurityResult, String> {
+    let session = require_session(&state)?;
+    let now = Utc::now();
+    let mut store = state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "USER_SECURITY", now)?;
+    store
+        .administer_user_security(StoreUserSecurityRequest {
+            context: session.terminal,
+            actor_user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            target_employee_no: request.target_employee_no,
+            action: request.action,
+            new_pin: request.new_pin,
+            reason: request.reason,
+            now,
+        })
+        .map_err(command_error)
 }
 
 #[tauri::command]
@@ -1775,6 +1817,7 @@ fn main() {
             login,
             logout,
             rotate_local_device_credential,
+            administer_user_security,
             open_cash_session,
             create_cart,
             cart_snapshot,

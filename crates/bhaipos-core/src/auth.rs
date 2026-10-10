@@ -1,6 +1,6 @@
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
+    Algorithm, Argon2, Params, Version,
 };
 use rand::rngs::OsRng;
 use thiserror::Error;
@@ -11,6 +11,17 @@ pub enum AuthError {
     InvalidPin,
     #[error("password hashing failure")]
     HashFailure,
+}
+
+const PIN_MEMORY_KIB: u32 = 19_456;
+const PIN_ITERATIONS: u32 = 2;
+const PIN_PARALLELISM: u32 = 1;
+const CURRENT_PIN_HASH_PREFIX: &str = "$argon2id$v=19$m=19456,t=2,p=1$";
+
+fn pin_argon2() -> Argon2<'static> {
+    let params = Params::new(PIN_MEMORY_KIB, PIN_ITERATIONS, PIN_PARALLELISM, None)
+        .expect("valid audited Argon2id PIN parameters");
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
 pub fn validate_pin(pin: &str) -> Result<(), AuthError> {
@@ -24,7 +35,7 @@ pub fn validate_pin(pin: &str) -> Result<(), AuthError> {
 pub fn hash_pin(pin: &str) -> Result<String, AuthError> {
     validate_pin(pin)?;
     let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
+    pin_argon2()
         .hash_password(pin.as_bytes(), &salt)
         .map(|p| p.to_string())
         .map_err(|_| AuthError::HashFailure)
@@ -35,9 +46,13 @@ pub fn verify_pin(hash: &str, pin: &str) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
-    Argon2::default()
+    pin_argon2()
         .verify_password(pin.as_bytes(), &parsed)
         .is_ok()
+}
+
+pub fn pin_hash_needs_upgrade(hash: &str) -> bool {
+    !hash.starts_with(CURRENT_PIN_HASH_PREFIX)
 }
 
 pub fn hash_secret(secret: &str) -> Result<String, AuthError> {
@@ -69,6 +84,8 @@ mod tests {
         let h = hash_pin("123456").unwrap();
         assert!(verify_pin(&h, "123456"));
         assert!(!verify_pin(&h, "123457"));
+        assert!(!pin_hash_needs_upgrade(&h));
+        assert!(pin_hash_needs_upgrade("$argon2id$v=19$m=4096,t=1,p=1$old"));
     }
     #[test]
     fn secret_round_trip() {

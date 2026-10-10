@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { posApi, type CartSnapshot, type CheckoutResult, type FailedPrintJob, type HeldCart, type ManagerApprovalCredentials, type OperationalAlert, type Payment, type RefundableSale } from './api/pos';
-import { adminApi, type ConfigureOfflinePolicy, type DiagnosticSnapshot, type OfflinePolicyDecision, type OfflinePolicyDetail, type OperationalDiagnostics, type RestorePreview } from './api/admin';
+import { adminApi, type ConfigureOfflinePolicy, type DiagnosticSnapshot, type OfflinePolicyDecision, type OfflinePolicyDetail, type OperationalDiagnostics, type RestorePreview, type UserSecurityAction, type UserSecurityResult } from './api/admin';
 import { fils, formatBhd, parseBhd, parseQuantityMilli } from './domain/money';
 
 type Phase = 'loading'|'setup'|'login'|'policy-recovery'|'cashier'|'admin'|'diagnostics';
@@ -27,6 +27,7 @@ export function App() {
   const [canExportDiagnostics,setCanExportDiagnostics]=useState(false);
   const [canViewOfflinePolicy,setCanViewOfflinePolicy]=useState(false);
   const [canManageOfflinePolicy,setCanManageOfflinePolicy]=useState(false);
+  const [canManageUserSecurity,setCanManageUserSecurity]=useState(false);
   const [diagnostics,setDiagnostics]=useState<OperationalDiagnostics|null>(null);
   const [offlinePolicy,setOfflinePolicy]=useState<OfflinePolicyDetail|null>(null);
   const [diagnosticSnapshots,setDiagnosticSnapshots]=useState<DiagnosticSnapshot[]>([]);
@@ -56,8 +57,8 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,policyRecoveryRequired:boolean){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy);
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,policyRecoveryRequired:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy); setCanManageUserSecurity(manageUserSecurity);
     if(policyRecoveryRequired){setOfflinePolicy(await adminApi.activeOfflinePolicy());setPhase('policy-recovery');setNotice('Selling is locked until a bounded offline policy is activated');return;}
     setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
@@ -71,6 +72,11 @@ export function App() {
   async function configureOfflinePolicy(request:Omit<ConfigureOfflinePolicy,'operationId'>){
     try{const result=await adminApi.configureOfflinePolicy({...request,operationId:crypto.randomUUID()});setOfflinePolicy(await adminApi.activeOfflinePolicy());setNotice(`Offline policy version ${result.version} activated for this branch and terminal`);}
     catch(error){setNotice(message(error));}
+  }
+
+  async function administerUserSecurity(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string}):Promise<UserSecurityResult>{
+    try{const result=await adminApi.administerUserSecurity({...request,operationId:crypto.randomUUID()});setNotice(`${result.display_name} · ${result.event_type.replaceAll('_',' ').toLowerCase()} · ${result.previous_status} → ${result.new_status}`);return result;}
+    catch(error){setNotice(message(error));throw error;}
   }
 
   async function captureDiagnostics(){
@@ -225,19 +231,19 @@ export function App() {
     catch(error){setNotice(message(error));}
   }
 
-  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setCanViewOfflinePolicy(false);setCanManageOfflinePolicy(false);setAlerts([]);setDiagnostics(null);setOfflinePolicy(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
+  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setCanViewOfflinePolicy(false);setCanManageOfflinePolicy(false);setCanManageUserSecurity(false);setAlerts([]);setDiagnostics(null);setOfflinePolicy(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
 
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
   if (phase==='policy-recovery') return <OfflinePolicyRecoveryScreen policy={offlinePolicy} notice={notice} onConfigure={configureOfflinePolicy} onLock={lock}/>;
   if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
-  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
+  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} canManageUserSecurity={canManageUserSecurity} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onAdministerUserSecurity={administerUserSecurity} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
 
   return <div className="app-shell">
     <header className="topbar">
-      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0026</span></div>
+      <div><strong>BHAIPOS</strong><span className="branch">Local terminal · schema 0027</span></div>
       <div className="status"><span className="dot"/>{notice}</div>
       <div>{canViewAlerts&&<button onClick={showAlertCentre}>Alert Centre</button>}{canViewDiagnostics&&<button onClick={showDiagnostics}>Diagnostics</button>}<button onClick={cashSessionId?undefined:openShift}>{cashSessionId?'Shift Open':'Open Shift'}</button><button onClick={lock}>Lock</button></div>
     </header>
@@ -287,9 +293,9 @@ function CashControlModal({onSubmit,onCancel,onError}:{onSubmit:(kind:CashMoveme
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,policyRecoveryRequired:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,policyRecoveryRequired:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy,result.offlinePolicyRecoveryRequired);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy,result.canManageUserSecurity,result.offlinePolicyRecoveryRequired);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
 }
 
@@ -316,7 +322,7 @@ function OfflinePolicyRecoveryScreen({policy,notice,onConfigure,onLock}:{policy:
   </div>;
 }
 
-function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,canViewAlerts,canExport,canViewOfflinePolicy,canManageOfflinePolicy,onAlerts,onRefresh,onCapture,onConfigureOfflinePolicy,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;offlinePolicy:OfflinePolicyDetail|null;notice:string;canViewAlerts:boolean;canExport:boolean;canViewOfflinePolicy:boolean;canManageOfflinePolicy:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onConfigureOfflinePolicy:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
+function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,canViewAlerts,canExport,canViewOfflinePolicy,canManageOfflinePolicy,canManageUserSecurity,onAlerts,onRefresh,onCapture,onConfigureOfflinePolicy,onAdministerUserSecurity,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;offlinePolicy:OfflinePolicyDetail|null;notice:string;canViewAlerts:boolean;canExport:boolean;canViewOfflinePolicy:boolean;canManageOfflinePolicy:boolean;canManageUserSecurity:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onConfigureOfflinePolicy:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onAdministerUserSecurity:(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string})=>Promise<UserSecurityResult>;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
   const healthy=diagnostics.database_integrity==='ok'&&diagnostics.foreign_key_violations===0;
   const policyState=offlinePolicyEvidenceState(offlinePolicy);
   return <div className="admin-shell">
@@ -327,9 +333,26 @@ function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,c
       <section className="admin-panels"><article><h2>Backup authority</h2><p>{diagnostics.backup_schedule?`${diagnostics.backup_schedule.state} · next ${diagnostics.backup_schedule.next_run_at} · retain ${diagnostics.backup_schedule.retention_count}`:'No scheduled backup configured'}</p><div className="admin-actions"><button className="primary" onClick={onBackup}>Create verified backup</button><button onClick={onSchedule}>Configure schedule</button></div><small>Trusted directory: {diagnostics.backup_directory}</small></article><article><h2>Latest verified evidence</h2>{diagnostics.latest_backup?<><p>{diagnostics.latest_backup.backup_type} · {diagnostics.latest_backup.state} · {diagnostics.latest_backup.integrity_state??'unknown integrity'}</p><small>{diagnostics.latest_backup.created_at} · {diagnostics.latest_backup.backup_id}</small><div className="admin-actions"><button onClick={onPreview}>Verify restore preview</button>{preview?.compatible&&<button className="danger" onClick={onRestore}>Restore after safety backup</button>}</div>{preview&&<p>SHA-256 {preview.sha256} · {preview.byte_size} bytes · schema {preview.schema_version}</p>}</>:<p>No backup evidence exists yet.</p>}</article></section>
       <section className="admin-panels"><article><h2>Synchronization</h2><dl className="diagnostic-list"><dt>Pending mutations</dt><dd>{diagnostics.pending_sync_mutations}</dd><dt>Requires review</dt><dd>{diagnostics.sync_requires_review}</dd><dt>Last checkpoint</dt><dd>{diagnostics.last_sync_at??'never'}</dd></dl></article><article><h2>Optional modules</h2><dl className="diagnostic-list"><dt>WhatsApp</dt><dd>{diagnostics.whatsapp_status}</dd><dt>OCR</dt><dd>{diagnostics.ocr_status}</dd><dt>Jobs requiring review</dt><dd>{diagnostics.background_jobs_requires_review}</dd></dl></article></section>
       {canViewOfflinePolicy&&<section className="policy-section"><article><div className="policy-heading"><div><span className="eyebrow">Bounded disconnected authority</span><h2>Offline policy</h2></div><span className={`badge policy-${policyState.toLowerCase()}`}>{policyState}</span></div>{offlinePolicy?<><dl className="diagnostic-list"><dt>Immutable version</dt><dd>{offlinePolicy.version}</dd><dt>Branch policy state</dt><dd>{offlinePolicy.state}</dd><dt>Device checkpoint</dt><dd>{offlinePolicy.device_state??'MISSING'}</dd><dt>Synchronized</dt><dd>{offlinePolicy.synchronized_at?new Date(offlinePolicy.synchronized_at).toLocaleString():'never'}</dd><dt>Policy expires</dt><dd>{new Date(offlinePolicy.valid_until).toLocaleString()}</dd><dt>Device authorization expires</dt><dd>{offlinePolicy.device_valid_until?new Date(offlinePolicy.device_valid_until).toLocaleString():'not authorized'}</dd></dl><div className="policy-rules">{offlinePolicy.rules.map(rule=><div key={rule.action_type}><b>{rule.action_type.replaceAll('_',' ')}</b><span>{rule.decision.replaceAll('_',' ')}</span><small>{rule.max_offline_age_minutes===0?'No offline age allowed':`${rule.max_offline_age_minutes} minute maximum age`}</small></div>)}</div></>:<p>No active offline policy exists for this branch. Offline authorization evaluation fails closed until an authorized administrator activates one.</p>}</article>{canManageOfflinePolicy&&<OfflinePolicyEditor policy={offlinePolicy} onConfigure={onConfigureOfflinePolicy}/>}</section>}
+      {canManageUserSecurity&&<section className="admin-panels"><UserSecurityPanel onSubmit={onAdministerUserSecurity}/><article><h2>Credential recovery controls</h2><p>Each action is branch-scoped, device-attributed, idempotent, and preserved in immutable security and hash-chained audit evidence.</p><small>PIN resets do not unlock a locked account. Use the separate unlock action after reviewing the lockout evidence.</small></article></section>}
       <section className="admin-panels"><article><h2>Redacted diagnostic evidence</h2><p>Exports contain scoped operational evidence without database paths, backup paths, PINs, credentials, cookies, or provider secrets.</p>{canExport?<button className="primary" onClick={onCapture}>Capture and export diagnostics</button>:<small>Export permission is not assigned.</small>}</article><article><h2>Immutable snapshot history</h2>{snapshots.length===0?<p>No diagnostic snapshots captured.</p>:<div className="snapshot-list">{snapshots.map(snapshot=><div key={snapshot.snapshot_id}><b>{new Date(snapshot.created_at).toLocaleString()}</b><small>{snapshot.app_version} · schema {snapshot.schema_version} · SHA-256 {snapshot.payload_sha256}</small></div>)}</div>}</article></section>
     </main>
   </div>;
+}
+
+function UserSecurityPanel({onSubmit}:{onSubmit:(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string})=>Promise<UserSecurityResult>}){
+  const [targetEmployeeNo,setTargetEmployeeNo]=useState('');
+  const [action,setAction]=useState<UserSecurityAction>('RESET_PIN');
+  const [newPin,setNewPin]=useState('');
+  const [reason,setReason]=useState('');
+  const [busy,setBusy]=useState(false);
+  async function submit(event:FormEvent){
+    event.preventDefault();setBusy(true);
+    try{
+      await onSubmit({targetEmployeeNo:targetEmployeeNo.trim(),action,newPin:action==='RESET_PIN'?newPin:undefined,reason:reason.trim()});
+      setNewPin('');setReason('');
+    }catch{}finally{setBusy(false);}
+  }
+  return <article><span className="eyebrow">Owner or administrator</span><h2>Staff account recovery</h2><form className="policy-editor" onSubmit={submit}><label>Employee number<input value={targetEmployeeNo} onChange={event=>setTargetEmployeeNo(event.target.value)} autoComplete="off" required/></label><label>Security action<select value={action} onChange={event=>{setAction(event.target.value as UserSecurityAction);setNewPin('');}}><option value="RESET_PIN">Reset PIN</option><option value="UNLOCK">Unlock account</option><option value="SUSPEND">Suspend account</option><option value="REACTIVATE">Reactivate account</option></select></label>{action==='RESET_PIN'&&<label>Replacement PIN<input type="password" inputMode="numeric" autoComplete="new-password" value={newPin} onChange={event=>setNewPin(event.target.value)} required/></label>}<label>Reason<input value={reason} onChange={event=>setReason(event.target.value)} minLength={3} required/></label><button className={action==='SUSPEND'?'danger':'primary'} disabled={busy}>{busy?'Applying…':'Apply auditable action'}</button></form></article>;
 }
 
 const OFFLINE_ACTIONS: Array<{actionType:string;decision:OfflinePolicyDecision;maxOfflineAgeMinutes:number}> = [
@@ -342,6 +365,7 @@ const OFFLINE_ACTIONS: Array<{actionType:string;decision:OfflinePolicyDecision;m
   {actionType:'CUSTOMER_CREDIT',decision:'DENY',maxOfflineAgeMinutes:0},
   {actionType:'STOCK_ADJUSTMENT',decision:'REQUIRE_MANAGER_APPROVAL',maxOfflineAgeMinutes:240},
   {actionType:'SUPPLIER_PAYMENT',decision:'DENY',maxOfflineAgeMinutes:0},
+  {actionType:'USER_SECURITY',decision:'ALLOW',maxOfflineAgeMinutes:120},
 ];
 
 function offlinePolicyRules(policy:OfflinePolicyDetail|null):ConfigureOfflinePolicy['rules']{

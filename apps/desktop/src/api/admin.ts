@@ -131,6 +131,18 @@ export type OfflinePolicyResult = {
   rule_count: number;
 };
 
+export type UserSecurityAction = 'RESET_PIN'|'UNLOCK'|'SUSPEND'|'REACTIVATE';
+
+export type UserSecurityResult = {
+  event_id: string;
+  target_user_id: string;
+  employee_no: string;
+  display_name: string;
+  previous_status: string;
+  new_status: string;
+  event_type: string;
+};
+
 export const adminApi = {
   diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
   diagnosticSnapshots: () => invoke<DiagnosticSnapshot[]>('list_diagnostic_snapshots'),
@@ -140,6 +152,8 @@ export const adminApi = {
     invoke<OfflinePolicyDetail | null>('get_active_offline_policy'),
   configureOfflinePolicy: (request: ConfigureOfflinePolicy) =>
     invoke<OfflinePolicyResult>('configure_offline_policy', { request }),
+  administerUserSecurity: (request: { operationId:string; targetEmployeeNo:string; action:UserSecurityAction; newPin?:string; reason:string }) =>
+    invoke<UserSecurityResult>('administer_user_security', { request }),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (
