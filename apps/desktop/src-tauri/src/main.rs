@@ -8,12 +8,14 @@ use bhaipos_core::{
     EscPosProfile, Money, OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
-    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
+    AssignCustomRoleRequest as StoreAssignCustomRoleRequest, BackgroundJobEnqueueRequest,
+    BackgroundJobFinishOutcome, BackgroundJobResult,
     BackupCreateRequest as StoreBackupCreateRequest,
     BackupScheduleRequest as StoreBackupScheduleRequest, BackupScheduleResult, CartSnapshot,
     CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
     CashSessionReport, CheckoutRequest as StoreCheckoutRequest, CheckoutResult,
     CloseCashSessionRequest as StoreCloseCashSessionRequest, CloseCashSessionResult,
+    ConfigureCustomRoleRequest as StoreConfigureCustomRoleRequest,
     ConfigureOfflinePolicyRequest as StoreConfigureOfflinePolicyRequest,
     DiagnosticCaptureRequest as StoreDiagnosticCaptureRequest, DiagnosticSnapshotResult,
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
@@ -22,8 +24,9 @@ use bhaipos_store::{
     OfflinePolicyDecision, OfflinePolicyDetail, OfflinePolicyResult, OperationalAlertResult,
     OperationalAlertSummary, OperationalDiagnostics, PaymentInput, RefundLineInput, RefundQuote,
     RefundRequest as StoreRefundRequest, RefundResult, RefundableSale,
-    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult, Store,
-    UserSecurityAction, UserSecurityRequest as StoreUserSecurityRequest, UserSecurityResult,
+    RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview, RestoreResult,
+    RoleAdministrationCatalog, RoleAdministrationResult, Store, UserSecurityAction,
+    UserSecurityRequest as StoreUserSecurityRequest, UserSecurityResult,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -94,6 +97,7 @@ struct LoginResponse {
     can_view_offline_policy: bool,
     can_manage_offline_policy: bool,
     can_manage_user_security: bool,
+    can_manage_roles: bool,
     offline_policy_recovery_required: bool,
 }
 
@@ -144,6 +148,25 @@ struct AdministerUserSecurityCommandRequest {
     target_employee_no: String,
     action: UserSecurityAction,
     new_pin: Option<String>,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigureCustomRoleCommandRequest {
+    operation_id: String,
+    role_name: String,
+    permission_codes: Vec<String>,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignCustomRoleCommandRequest {
+    operation_id: String,
+    target_employee_no: String,
+    role_name: String,
+    assigned: bool,
     reason: String,
 }
 
@@ -570,6 +593,9 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_manage_user_security = store
         .user_has_permission(terminal, user_id, "employee.security.manage")
         .map_err(command_error)?;
+    let can_manage_roles = store
+        .user_has_permission(terminal, user_id, "role.manage")
+        .map_err(command_error)?;
     let login_authorization = store
         .offline_authorization(terminal, user_id, "LOGIN", now)
         .map_err(command_error)?;
@@ -617,6 +643,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         can_view_offline_policy,
         can_manage_offline_policy,
         can_manage_user_security,
+        can_manage_roles,
         offline_policy_recovery_required,
     })
 }
@@ -670,6 +697,70 @@ fn administer_user_security(
             target_employee_no: request.target_employee_no,
             action: request.action,
             new_pin: request.new_pin,
+            reason: request.reason,
+            now,
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn role_administration_catalog(
+    state: State<'_, AppState>,
+) -> Result<RoleAdministrationCatalog, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .role_administration_catalog(session.terminal, session.user_id)
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn configure_custom_role(
+    state: State<'_, AppState>,
+    request: ConfigureCustomRoleCommandRequest,
+) -> Result<RoleAdministrationResult, String> {
+    let session = require_session(&state)?;
+    let now = Utc::now();
+    let mut store = state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "ROLE_ADMINISTRATION", now)?;
+    store
+        .configure_custom_role(StoreConfigureCustomRoleRequest {
+            context: session.terminal,
+            actor_user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            role_name: request.role_name,
+            permission_codes: request.permission_codes,
+            reason: request.reason,
+            now,
+        })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn assign_custom_role(
+    state: State<'_, AppState>,
+    request: AssignCustomRoleCommandRequest,
+) -> Result<RoleAdministrationResult, String> {
+    let session = require_session(&state)?;
+    let now = Utc::now();
+    let mut store = state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "ROLE_ADMINISTRATION", now)?;
+    store
+        .assign_custom_role(StoreAssignCustomRoleRequest {
+            context: session.terminal,
+            actor_user_id: session.user_id,
+            operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            target_employee_no: request.target_employee_no,
+            role_name: request.role_name,
+            assigned: request.assigned,
             reason: request.reason,
             now,
         })
@@ -1818,6 +1909,9 @@ fn main() {
             logout,
             rotate_local_device_credential,
             administer_user_security,
+            role_administration_catalog,
+            configure_custom_role,
+            assign_custom_role,
             open_cash_session,
             create_cart,
             cart_snapshot,
