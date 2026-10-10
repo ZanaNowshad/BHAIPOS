@@ -264,6 +264,7 @@ impl Store {
                     policy_version: None,
                     action_type: action_type.trim().to_ascii_uppercase(),
                     decision: OfflinePolicyDecision::Deny,
+                    reason_code: OfflineAuthorizationReason::UnknownAction,
                     reason: "unknown offline action fails closed".into(),
                     policy_valid_until: None,
                 })
@@ -304,6 +305,7 @@ impl Store {
                 policy_version: None,
                 action_type: action,
                 decision: OfflinePolicyDecision::Deny,
+                reason_code: OfflineAuthorizationReason::NoActivePolicyRule,
                 reason: "no active device-scoped offline policy rule".into(),
                 policy_valid_until: None,
             });
@@ -319,28 +321,43 @@ impl Store {
         let policy_expires_at = parse_time(&policy_valid_until)?;
         let device_expires_at = parse_time(&device_valid_until)?;
         let synchronized_at = parse_time(&synchronized_at)?;
-        let denied = |reason: &str| OfflineAuthorizationResult {
-            policy_id: Some(policy_uuid),
-            policy_version: Some(version),
-            action_type: action.clone(),
-            decision: OfflinePolicyDecision::Deny,
-            reason: reason.into(),
-            policy_valid_until: Some(policy_valid_until.clone()),
+        let denied = |reason_code: OfflineAuthorizationReason, reason: &str| {
+            OfflineAuthorizationResult {
+                policy_id: Some(policy_uuid),
+                policy_version: Some(version),
+                action_type: action.clone(),
+                decision: OfflinePolicyDecision::Deny,
+                reason_code,
+                reason: reason.into(),
+                policy_valid_until: Some(policy_valid_until.clone()),
+            }
         };
         if now < valid_from_at {
-            return Ok(denied("offline policy is not effective yet"));
+            return Ok(denied(
+                OfflineAuthorizationReason::NotEffective,
+                "offline policy is not effective yet",
+            ));
         }
         if now > policy_expires_at || now > device_expires_at {
-            return Ok(denied("offline policy authorization has expired"));
+            return Ok(denied(
+                OfflineAuthorizationReason::Expired,
+                "offline policy authorization has expired",
+            ));
         }
         if device_state != "ACTIVE" {
-            return Ok(denied("device offline policy state is not active"));
+            return Ok(denied(
+                OfflineAuthorizationReason::DeviceInactive,
+                "device offline policy state is not active",
+            ));
         }
         let allowed_age = max_staleness.min(action_max_age);
         if allowed_age == 0
             || now.signed_duration_since(synchronized_at) > chrono::Duration::minutes(allowed_age)
         {
-            return Ok(denied("offline policy evidence is stale for this action"));
+            return Ok(denied(
+                OfflineAuthorizationReason::Stale,
+                "offline policy evidence is stale for this action",
+            ));
         }
         let decision = match decision.as_str() {
             "ALLOW" => OfflinePolicyDecision::Allow,
@@ -352,6 +369,7 @@ impl Store {
             policy_version: Some(version),
             action_type: action,
             decision,
+            reason_code: OfflineAuthorizationReason::ActiveRule,
             reason: "active bounded offline policy rule".into(),
             policy_valid_until: Some(policy_valid_until),
         })

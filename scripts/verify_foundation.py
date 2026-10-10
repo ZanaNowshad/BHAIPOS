@@ -370,6 +370,12 @@ registered_commands={name.strip() for name in registered.group(1).split(',') if 
 assert required_commands<=registered_commands, sorted(required_commands-registered_commands)
 assert 'struct AuthenticatedSession' in desktop_bridge and 'fn require_session' in desktop_bridge
 assert 'validate_local_session' in desktop_bridge
+assert 'offline_policy_recovery_only' in desktop_bridge
+assert 'offline_policy_recovery_required' in desktop_bridge
+assert 'fn require_authenticated_session' in desktop_bridge
+assert 'selling and operational commands are locked' in desktop_bridge
+for offline_action in ['"LOGIN"','"SALE_CHECKOUT"','"CUSTOMER_CREDIT"','"REFUND"','"CASH_EVENT"']:
+    assert offline_action in desktop_bridge, offline_action
 assert re.search(
     r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0025_offline_authorization_policy"',
     rust_authoritative,

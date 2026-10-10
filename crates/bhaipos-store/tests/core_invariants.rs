@@ -7,8 +7,9 @@ use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
     CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
-    LocalBootstrapRequest, NewProduct, OfflineActionRuleInput, OfflinePolicyDecision, PaymentInput,
-    RefundLineInput, RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
+    LocalBootstrapRequest, NewProduct, OfflineActionRuleInput, OfflineAuthorizationReason,
+    OfflinePolicyDecision, PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest, Store,
+    StoreError, SyncDeliveryOutcome,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -948,6 +949,16 @@ fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
         now,
     };
 
+    let missing = f
+        .store
+        .offline_authorization(context, f.user, "LOGIN", now)
+        .unwrap();
+    assert_eq!(missing.decision, OfflinePolicyDecision::Deny);
+    assert_eq!(
+        missing.reason_code,
+        OfflineAuthorizationReason::NoActivePolicyRule
+    );
+
     assert!(matches!(
         f.store.configure_offline_policy(request()).unwrap_err(),
         StoreError::Authorization("offline_policy.manage")
@@ -1014,12 +1025,17 @@ fn offline_policy_is_versioned_bounded_payload_bound_and_fails_closed() {
         )
         .unwrap();
     assert_eq!(stale_refund.decision, OfflinePolicyDecision::Deny);
+    assert_eq!(stale_refund.reason_code, OfflineAuthorizationReason::Stale);
     assert!(stale_refund.reason.contains("stale"));
     let unknown = f
         .store
         .offline_authorization(context, f.user, "FUTURE_UNKNOWN", now)
         .unwrap();
     assert_eq!(unknown.decision, OfflinePolicyDecision::Deny);
+    assert_eq!(
+        unknown.reason_code,
+        OfflineAuthorizationReason::UnknownAction
+    );
 
     let changed = f
         .store

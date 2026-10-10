@@ -563,11 +563,24 @@ pub struct OfflinePolicyDetail {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OfflineAuthorizationReason {
+    ActiveRule,
+    UnknownAction,
+    NoActivePolicyRule,
+    NotEffective,
+    Expired,
+    DeviceInactive,
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OfflineAuthorizationResult {
     pub policy_id: Option<Uuid>,
     pub policy_version: Option<i64>,
     pub action_type: String,
     pub decision: OfflinePolicyDecision,
+    pub reason_code: OfflineAuthorizationReason,
     pub reason: String,
     pub policy_valid_until: Option<String>,
 }

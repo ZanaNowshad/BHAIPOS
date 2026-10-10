@@ -18,7 +18,8 @@ use bhaipos_store::{
     DiagnosticCaptureRequest as StoreDiagnosticCaptureRequest, DiagnosticSnapshotResult,
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
     LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
-    OfflineActionRuleInput, OfflinePolicyDecision, OfflinePolicyDetail, OfflinePolicyResult,
+    OfflineActionRuleInput, OfflineAuthorizationReason, OfflinePolicyDecision, OfflinePolicyDetail,
+    OfflinePolicyResult,
     OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics, PaymentInput,
     RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
     RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
@@ -38,6 +39,7 @@ struct AuthenticatedSession {
     terminal: LocalTerminalContext,
     user_id: bhaipos_core::UserId,
     cash_session_id: Option<Uuid>,
+    offline_policy_recovery_only: bool,
 }
 
 struct AppState {
@@ -91,6 +93,7 @@ struct LoginResponse {
     can_export_diagnostics: bool,
     can_view_offline_policy: bool,
     can_manage_offline_policy: bool,
+    offline_policy_recovery_required: bool,
 }
 
 #[derive(Serialize)]
@@ -292,7 +295,9 @@ fn parse_uuid(value: &str, field: &str) -> Result<Uuid, String> {
     Uuid::parse_str(value).map_err(|_| format!("invalid {field}"))
 }
 
-fn require_session(state: &State<'_, AppState>) -> Result<AuthenticatedSession, String> {
+fn require_authenticated_session(
+    state: &State<'_, AppState>,
+) -> Result<AuthenticatedSession, String> {
     let session = state
         .session
         .lock()
@@ -307,6 +312,39 @@ fn require_session(state: &State<'_, AppState>) -> Result<AuthenticatedSession, 
         .validate_local_session(session.terminal, session.user_id)
         .map_err(command_error)?;
     Ok(session)
+}
+
+fn require_session(state: &State<'_, AppState>) -> Result<AuthenticatedSession, String> {
+    let session = require_authenticated_session(state)?;
+    if session.offline_policy_recovery_only {
+        return Err(
+            "offline policy recovery required; selling and operational commands are locked".into(),
+        );
+    }
+    Ok(session)
+}
+
+fn require_offline_action(
+    store: &Store,
+    session: AuthenticatedSession,
+    action_type: &str,
+    now: DateTime<Utc>,
+) -> Result<(), String> {
+    let authorization = store
+        .offline_authorization(session.terminal, session.user_id, action_type, now)
+        .map_err(command_error)?;
+    match authorization.decision {
+        OfflinePolicyDecision::Allow => Ok(()),
+        OfflinePolicyDecision::RequireManagerApproval => Err(format!(
+            "manager approval is required for offline {}",
+            authorization.action_type.to_ascii_lowercase().replace('_', " ")
+        )),
+        OfflinePolicyDecision::Deny => Err(format!(
+            "offline {} denied: {}",
+            authorization.action_type.to_ascii_lowercase().replace('_', " "),
+            authorization.reason
+        )),
+    }
 }
 
 fn payments(input: Vec<PaymentRequest>) -> Vec<PaymentInput> {
@@ -397,6 +435,7 @@ fn bootstrap_local_business(
 
 #[tauri::command]
 fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginResponse, String> {
+    let now = Utc::now();
     let terminal = state
         .terminal
         .lock()
@@ -413,7 +452,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
             terminal.tenant_id,
             &request.employee_no,
             &request.pin,
-            Utc::now(),
+            now,
             5,
             15,
         )
@@ -447,23 +486,50 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_manage_offline_policy = store
         .user_has_permission(terminal, user_id, "offline_policy.manage")
         .map_err(command_error)?;
+    let login_authorization = store
+        .offline_authorization(terminal, user_id, "LOGIN", now)
+        .map_err(command_error)?;
+    let offline_policy_recovery_required = match login_authorization.decision {
+        OfflinePolicyDecision::Allow => false,
+        _ if can_view_offline_policy
+            && can_manage_offline_policy
+            && matches!(
+                login_authorization.reason_code,
+                OfflineAuthorizationReason::NoActivePolicyRule
+                    | OfflineAuthorizationReason::Expired
+                    | OfflineAuthorizationReason::Stale
+            ) => true,
+        _ => {
+            return Err(format!(
+                "offline login denied: {}",
+                login_authorization.reason
+            ))
+        }
+    };
+    let authorized_cash_session_id = if offline_policy_recovery_required {
+        None
+    } else {
+        cash_session_id
+    };
     *state
         .session
         .lock()
         .map_err(|_| "session state poisoned".to_string())? = Some(AuthenticatedSession {
-        terminal,
-        user_id,
-        cash_session_id,
-    });
+            terminal,
+            user_id,
+            cash_session_id: authorized_cash_session_id,
+            offline_policy_recovery_only: offline_policy_recovery_required,
+        });
     Ok(LoginResponse {
         display_name,
-        cash_session_id: cash_session_id.map(|id| id.to_string()),
+        cash_session_id: authorized_cash_session_id.map(|id| id.to_string()),
         can_view_alerts,
         can_manage_alerts,
         can_view_diagnostics,
         can_export_diagnostics,
         can_view_offline_policy,
         can_manage_offline_policy,
+        offline_policy_recovery_required,
     })
 }
 
@@ -637,10 +703,20 @@ fn checkout(
     request: CheckoutRequest,
 ) -> Result<CheckoutResult, String> {
     let session = require_session(&state)?;
-    state
+    let now = Utc::now();
+    let uses_customer_credit = request
+        .payments
+        .iter()
+        .any(|payment| payment.kind == TenderKind::CustomerCredit);
+    let mut store = state
         .store
         .lock()
-        .map_err(|_| "database state poisoned".to_string())?
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "SALE_CHECKOUT", now)?;
+    if uses_customer_credit {
+        require_offline_action(&store, session, "CUSTOMER_CREDIT", now)?;
+    }
+    store
         .checkout(StoreCheckoutRequest {
             tenant_id: session.terminal.tenant_id,
             branch_id: session.terminal.branch_id,
@@ -651,7 +727,7 @@ fn checkout(
             operation_id: OperationId(parse_uuid(&request.operation_id, "operation ID")?),
             cash_session_id: session.cash_session_id,
             payments: payments(request.payments),
-            now: Utc::now(),
+            now,
         })
         .map_err(command_error)
 }
@@ -732,6 +808,7 @@ fn quote_refund(
 #[tauri::command]
 fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundResult, String> {
     let session = require_session(&state)?;
+    let now = Utc::now();
     let lines = request
         .lines
         .into_iter()
@@ -742,10 +819,12 @@ fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundRe
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    state
+    let mut store = state
         .store
         .lock()
-        .map_err(|_| "database state poisoned".to_string())?
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "REFUND", now)?;
+    store
         .refund(StoreRefundRequest {
             tenant_id: session.terminal.tenant_id,
             branch_id: session.terminal.branch_id,
@@ -757,7 +836,7 @@ fn refund(state: State<'_, AppState>, request: RefundRequest) -> Result<RefundRe
             lines,
             cash_session_id: session.cash_session_id,
             payments: payments(request.payments),
-            now: Utc::now(),
+            now,
         })
         .map_err(command_error)
 }
@@ -771,10 +850,13 @@ fn record_cash_movement(
     let cash_session_id = session
         .cash_session_id
         .ok_or_else(|| "open cash session required".to_string())?;
-    state
+    let now = Utc::now();
+    let mut store = state
         .store
         .lock()
-        .map_err(|_| "database state poisoned".to_string())?
+        .map_err(|_| "database state poisoned".to_string())?;
+    require_offline_action(&store, session, "CASH_EVENT", now)?;
+    store
         .record_cash_movement(StoreCashMovementRequest {
             tenant_id: session.terminal.tenant_id,
             branch_id: session.terminal.branch_id,
@@ -785,7 +867,7 @@ fn record_cash_movement(
             kind: request.kind,
             amount: Money(request.amount_fils),
             reason: request.reason,
-            now: Utc::now(),
+            now,
         })
         .map_err(command_error)
 }
@@ -1012,7 +1094,7 @@ fn get_operational_diagnostics(state: State<'_, AppState>) -> Result<DesktopDiag
 fn get_active_offline_policy(
     state: State<'_, AppState>,
 ) -> Result<Option<OfflinePolicyDetail>, String> {
-    let session = require_session(&state)?;
+    let session = require_authenticated_session(&state)?;
     state
         .store
         .lock()
@@ -1026,7 +1108,7 @@ fn configure_offline_policy(
     state: State<'_, AppState>,
     request: ConfigureOfflinePolicyCommandRequest,
 ) -> Result<OfflinePolicyResult, String> {
-    let session = require_session(&state)?;
+    let session = require_authenticated_session(&state)?;
     state
         .store
         .lock()
