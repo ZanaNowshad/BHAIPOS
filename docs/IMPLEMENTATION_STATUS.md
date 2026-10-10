@@ -14,9 +14,9 @@ Status vocabulary:
 
 **LOCAL VERIFIED**
 
-- All twenty-eight SQLite migrations load into a clean in-memory database and can be reapplied safely.
-- 178 application tables created.
-- 281 integrity/security triggers created.
+- All twenty-nine SQLite migrations load into a clean in-memory database and can be reapplied safely.
+- 179 application tables created.
+- 284 integrity/security triggers created.
 - 98 `*_fils` financial columns use integer affinity.
 - `PRAGMA foreign_key_check` returns no violations after schema creation.
 - A deliberately cross-tenant device/branch insert is rejected by the database guard.
@@ -55,6 +55,7 @@ Status vocabulary:
 
 **CI VERIFIED**
 
+- GitHub Actions run `38091877923` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for versioned custom-role administration merged at `b7723b316204ab5d1633c2dde948974919f50c83`.
 - GitHub Actions run `38091080036` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for trusted staff identity recovery merged at `d4ce619146f548628c68f5862821a858513f83e0`.
 - GitHub Actions run `38083904854` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for atomic action-bound offline manager approvals merged at `f929dd2f89484cae4ad19a23be26c3481e73285e`.
 - GitHub Actions run `38083103186` passes Rust formatting, strict Clippy, the full Rust workspace test suite, desktop Rust compilation, desktop TypeScript checking and the production UI build for bounded offline login/action enforcement merged at `c8ae1ad712395a44b9ea65f09102a1409915d12c`.
@@ -88,7 +89,8 @@ Status vocabulary:
 - integer-fils money with checked aggregation/variance/change arithmetic and deterministic validated basis-point VAT;
 - integer thousandth quantities;
 - explicit Argon2id PIN hash/verification, transparent successful-login hash upgrade, lockout, and branch-scoped idempotent administrator reset/unlock/suspend/reactivate with immutable security evidence;
-- versioned custom-role permission replacement and branch assignment with payload-bound replay, immutable event/audit evidence and protected built-in roles (working tree; CI pending);
+- versioned custom-role permission replacement and branch assignment with payload-bound replay, immutable event/audit evidence and protected built-in roles;
+- permissioned, payload-bound audit-chain verification with immutable run evidence, critical security-alert production on failure and a trusted Diagnostics action (working tree; CI pending);
 - device secret hash/authentication, credential rotation, suspend/revoke;
 - fail-closed RBAC for checkout/refund/cash-session open;
 - bound HMAC manager approvals and nonce replay prevention;

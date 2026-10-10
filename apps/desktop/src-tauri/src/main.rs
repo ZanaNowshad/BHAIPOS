@@ -8,8 +8,8 @@ use bhaipos_core::{
     EscPosProfile, Money, OperationId, QuantityMilli, ReceiptEncoding, SaleId, TenderKind,
 };
 use bhaipos_store::{
-    AssignCustomRoleRequest as StoreAssignCustomRoleRequest, BackgroundJobEnqueueRequest,
-    BackgroundJobFinishOutcome, BackgroundJobResult,
+    AssignCustomRoleRequest as StoreAssignCustomRoleRequest, AuditVerificationResult,
+    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackgroundJobResult,
     BackupCreateRequest as StoreBackupCreateRequest,
     BackupScheduleRequest as StoreBackupScheduleRequest, BackupScheduleResult, CartSnapshot,
     CashMovementKind, CashMovementRequest as StoreCashMovementRequest, CashMovementResult,
@@ -98,6 +98,7 @@ struct LoginResponse {
     can_manage_offline_policy: bool,
     can_manage_user_security: bool,
     can_manage_roles: bool,
+    can_verify_audit: bool,
     offline_policy_recovery_required: bool,
 }
 
@@ -168,6 +169,12 @@ struct AssignCustomRoleCommandRequest {
     role_name: String,
     assigned: bool,
     reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifyAuditChainCommandRequest {
+    operation_id: String,
 }
 
 #[derive(Serialize)]
@@ -596,6 +603,9 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
     let can_manage_roles = store
         .user_has_permission(terminal, user_id, "role.manage")
         .map_err(command_error)?;
+    let can_verify_audit = store
+        .user_has_permission(terminal, user_id, "audit.verify")
+        .map_err(command_error)?;
     let login_authorization = store
         .offline_authorization(terminal, user_id, "LOGIN", now)
         .map_err(command_error)?;
@@ -644,6 +654,7 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         can_manage_offline_policy,
         can_manage_user_security,
         can_manage_roles,
+        can_verify_audit,
         offline_policy_recovery_required,
     })
 }
@@ -764,6 +775,25 @@ fn assign_custom_role(
             reason: request.reason,
             now,
         })
+        .map_err(command_error)
+}
+
+#[tauri::command]
+fn verify_local_audit_chain(
+    state: State<'_, AppState>,
+    request: VerifyAuditChainCommandRequest,
+) -> Result<AuditVerificationResult, String> {
+    let session = require_session(&state)?;
+    state
+        .store
+        .lock()
+        .map_err(|_| "database state poisoned".to_string())?
+        .verify_local_audit_chain(
+            session.terminal,
+            session.user_id,
+            OperationId(parse_uuid(&request.operation_id, "operation ID")?),
+            Utc::now(),
+        )
         .map_err(command_error)
 }
 
@@ -1912,6 +1942,7 @@ fn main() {
             role_administration_catalog,
             configure_custom_role,
             assign_custom_role,
+            verify_local_audit_chain,
             open_cash_session,
             create_cart,
             cart_snapshot,

@@ -30,6 +30,7 @@ UPGRADE_0025=ROOT/'migrations/0025_offline_authorization_policy.sql'
 UPGRADE_0026=ROOT/'migrations/0026_manager_approval_evidence.sql'
 UPGRADE_0027=ROOT/'migrations/0027_user_security_recovery.sql'
 UPGRADE_0028=ROOT/'migrations/0028_role_administration.sql'
+UPGRADE_0029=ROOT/'migrations/0029_audit_verification.sql'
 
 def uid(): return str(uuid.uuid4())
 def must_fail(fn, contains=None):
@@ -115,6 +116,7 @@ def apply_schema(con, include_payload_binding=True):
         con.executescript(UPGRADE_0026.read_text())
         con.executescript(UPGRADE_0027.read_text())
         con.executescript(UPGRADE_0028.read_text())
+        con.executescript(UPGRADE_0029.read_text())
 
 con=sqlite3.connect(':memory:')
 apply_schema(con)
@@ -136,6 +138,8 @@ con.executescript(UPGRADE_0027.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='employee.security.manage'",(upgrade_role,)).fetchone()
 con.executescript(UPGRADE_0028.read_text())
 assert con.execute("select 1 from role_permissions where role_id=? and permission_code='role.manage'",(upgrade_role,)).fetchone()
+con.executescript(UPGRADE_0029.read_text())
+assert con.execute("select 1 from role_permissions where role_id=? and permission_code='audit.verify'",(upgrade_role,)).fetchone()
 
 # The additive binding migration must preserve historical unbound results.
 # Runtime replay of these rows fails closed because their request payload is
@@ -194,7 +198,7 @@ for table in tables:
 assert financial_cols and not float_cols, float_cols
 
 # Curated tenant-bearing authoritative tables must explicitly carry tenant_id.
-for table in ['devices','registers','cash_sessions','products','product_barcodes','branch_assortments','price_history','stock_levels','inventory_movements','carts','sales','refunds','sync_queue','audit_events','supplier_payments','customer_credit_payments','operational_alerts','ai_action_runs','print_jobs','user_security_events','custom_role_profiles','role_administration_events']:
+for table in ['devices','registers','cash_sessions','products','product_barcodes','branch_assortments','price_history','stock_levels','inventory_movements','carts','sales','refunds','sync_queue','audit_events','supplier_payments','customer_credit_payments','operational_alerts','ai_action_runs','print_jobs','user_security_events','custom_role_profiles','role_administration_events','audit_verification_runs']:
     cols={r[1] for r in con.execute(f'PRAGMA table_info("{table}")')}
     assert 'tenant_id' in cols, table
 
@@ -227,6 +231,9 @@ con.execute("insert into custom_role_profiles(role_id,tenant_id,version,created_
 role_event=uid()
 con.execute("insert into role_administration_events(id,tenant_id,branch_id,role_id,target_user_id,actor_user_id,device_id,operation_id,event_type,previous_json,new_json,reason,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",(role_event,ta,ba,custom_role,None,user,device,uid(),'ROLE_CREATED','[]','[\"sale.refund\"]','Create least privilege role',now))
 must_fail(lambda: con.execute("update role_administration_events set reason='rewritten' where id=?",(role_event,)), 'IMMUTABLE')
+audit_verification=uid()
+con.execute("insert into audit_verification_runs(id,tenant_id,branch_id,device_id,actor_user_id,operation_id,chain_valid,event_count,verified_head_hash,alert_id,verified_at) values(?,?,?,?,?,?,1,0,NULL,NULL,?)",(audit_verification,ta,ba,device,user,uid(),now))
+must_fail(lambda: con.execute("delete from audit_verification_runs where id=?",(audit_verification,)), 'IMMUTABLE')
 con.executescript(UPGRADE_0009.read_text())
 assert con.execute("select paper_width_mm,characters_per_line,drawer_pulse_policy from printer_profiles where device_id=?",(device,)).fetchone()==(80,48,'CASH_SALE')
 must_fail(lambda: con.execute("insert into printer_profiles(id,tenant_id,branch_id,device_id,friendly_name,transport,paper_width_mm,characters_per_line,character_encoding,cut_mode,drawer_pulse_policy,created_at,updated_at) values(?,?,?,?,?,'WINDOWS_SPOOLER',80,48,'ASCII','PARTIAL','NEVER',?,?)",(uid(),tb,bb,device,'bad',now,now)), 'TENANT_SCOPE_VIOLATION')
@@ -356,7 +363,7 @@ must_fail(
 )
 
 # Source policy scans: authoritative Rust money/store cannot contain floating money types.
-rust_authoritative=(ROOT/'crates/bhaipos-core/src/money.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-core/src/tax.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/store.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/identity_ops.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/role_ops.rs').read_text()
+rust_authoritative=(ROOT/'crates/bhaipos-core/src/money.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-core/src/tax.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/store.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/identity_ops.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/role_ops.rs').read_text()+'\n'+(ROOT/'crates/bhaipos-store/src/audit_ops.rs').read_text()
 assert not re.search(r'\bf(?:32|64)\b', rust_authoritative), 'floating type found in authoritative financial source'
 assert 'transaction_with_behavior(TransactionBehavior::Immediate)' in rust_authoritative
 assert 'idempotency_results' in rust_authoritative
@@ -397,6 +404,7 @@ required_commands={
     'get_active_offline_policy','configure_offline_policy',
     'administer_user_security',
     'role_administration_catalog','configure_custom_role','assign_custom_role',
+    'verify_local_audit_chain',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -411,7 +419,7 @@ assert 'selling and operational commands are locked' in desktop_bridge
 for offline_action in ['"LOGIN"','"SALE_CHECKOUT"','"CUSTOMER_CREDIT"','"REFUND"','"CASH_EVENT"','"USER_SECURITY"']:
     assert offline_action in desktop_bridge, offline_action
 assert re.search(
-    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0028_role_administration"',
+    r'pub const LATEST_SCHEMA\s*:\s*&str\s*=\s*"0029_audit_verification"',
     rust_authoritative,
 )
 assert 'schema:bhaipos_store::LATEST_SCHEMA' in desktop_bridge.replace(' ','')

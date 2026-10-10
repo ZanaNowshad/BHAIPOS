@@ -17,6 +17,8 @@ use uuid::Uuid;
 mod alert_ops;
 #[path = "attendance_ops.rs"]
 mod attendance_ops;
+#[path = "audit_ops.rs"]
+mod audit_ops;
 #[path = "backup_ops.rs"]
 mod backup_ops;
 #[path = "customer_ops.rs"]
@@ -73,8 +75,10 @@ const MIGRATION_0025: &str =
 const MIGRATION_0026: &str = include_str!("../../../migrations/0026_manager_approval_evidence.sql");
 const MIGRATION_0027: &str = include_str!("../../../migrations/0027_user_security_recovery.sql");
 const MIGRATION_0028: &str = include_str!("../../../migrations/0028_role_administration.sql");
-pub const LATEST_SCHEMA: &str = "0028_role_administration";
+const MIGRATION_0029: &str = include_str!("../../../migrations/0029_audit_verification.sql");
+pub const LATEST_SCHEMA: &str = "0029_audit_verification";
 
+pub use audit_ops::*;
 pub use identity_ops::*;
 pub use role_ops::*;
 
@@ -1217,6 +1221,7 @@ impl Store {
         self.conn.execute_batch(MIGRATION_0026)?;
         self.conn.execute_batch(MIGRATION_0027)?;
         self.conn.execute_batch(MIGRATION_0028)?;
+        self.conn.execute_batch(MIGRATION_0029)?;
         Ok(())
     }
     fn ensure_column(
@@ -1386,6 +1391,10 @@ impl Store {
             (
                 "role.manage",
                 "Configure custom roles and branch assignments",
+            ),
+            (
+                "audit.verify",
+                "Verify the local tamper-evident audit chain",
             ),
             ("attendance.clock", "Record employee clock and break events"),
             ("attendance.manage", "Resolve attendance exceptions"),
