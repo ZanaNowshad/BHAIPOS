@@ -125,21 +125,20 @@ impl Store {
         )?;
         let targets = {
             let mut statement = tx.prepare("SELECT u.id,u.display_name,u.status FROM users u WHERE u.tenant_id=?1 AND u.employee_no=?2 AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.tenant_id=u.tenant_id AND (ur.branch_id IS NULL OR ur.branch_id=?3)) LIMIT 2")?;
-            let rows = statement
-                .query_map(
-                    params![
-                        req.context.tenant_id.to_string(),
-                        employee_no,
-                        req.context.branch_id.to_string()
-                    ],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
-                )?;
+            let rows = statement.query_map(
+                params![
+                    req.context.tenant_id.to_string(),
+                    employee_no,
+                    req.context.branch_id.to_string()
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         if targets.len() != 1 {
