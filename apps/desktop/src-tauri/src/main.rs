@@ -19,9 +19,8 @@ use bhaipos_store::{
     DiagnosticSnapshotSummary, FailedPrintJob, HeldCartSummary,
     LocalBootstrapRequest as StoreBootstrapRequest, LocalBootstrapResult, LocalTerminalContext,
     OfflineActionRuleInput, OfflineAuthorizationReason, OfflinePolicyDecision, OfflinePolicyDetail,
-    OfflinePolicyResult,
-    OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics, PaymentInput,
-    RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
+    OfflinePolicyResult, OperationalAlertResult, OperationalAlertSummary, OperationalDiagnostics,
+    PaymentInput, RefundLineInput, RefundQuote, RefundRequest as StoreRefundRequest, RefundResult,
     RefundableSale, RestoreBackupRequest as StoreRestoreBackupRequest, RestorePreview,
     RestoreResult, Store,
 };
@@ -337,11 +336,17 @@ fn require_offline_action(
         OfflinePolicyDecision::Allow => Ok(()),
         OfflinePolicyDecision::RequireManagerApproval => Err(format!(
             "manager approval is required for offline {}",
-            authorization.action_type.to_ascii_lowercase().replace('_', " ")
+            authorization
+                .action_type
+                .to_ascii_lowercase()
+                .replace('_', " ")
         )),
         OfflinePolicyDecision::Deny => Err(format!(
             "offline {} denied: {}",
-            authorization.action_type.to_ascii_lowercase().replace('_', " "),
+            authorization
+                .action_type
+                .to_ascii_lowercase()
+                .replace('_', " "),
             authorization.reason
         )),
     }
@@ -498,7 +503,10 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
                 OfflineAuthorizationReason::NoActivePolicyRule
                     | OfflineAuthorizationReason::Expired
                     | OfflineAuthorizationReason::Stale
-            ) => true,
+            ) =>
+        {
+            true
+        }
         _ => {
             return Err(format!(
                 "offline login denied: {}",
@@ -515,11 +523,11 @@ fn login(state: State<'_, AppState>, request: LoginRequest) -> Result<LoginRespo
         .session
         .lock()
         .map_err(|_| "session state poisoned".to_string())? = Some(AuthenticatedSession {
-            terminal,
-            user_id,
-            cash_session_id: authorized_cash_session_id,
-            offline_policy_recovery_only: offline_policy_recovery_required,
-        });
+        terminal,
+        user_id,
+        cash_session_id: authorized_cash_session_id,
+        offline_policy_recovery_only: offline_policy_recovery_required,
+    });
     Ok(LoginResponse {
         display_name,
         cash_session_id: authorized_cash_session_id.map(|id| id.to_string()),

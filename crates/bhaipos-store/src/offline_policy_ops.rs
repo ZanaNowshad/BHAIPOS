@@ -321,8 +321,8 @@ impl Store {
         let policy_expires_at = parse_time(&policy_valid_until)?;
         let device_expires_at = parse_time(&device_valid_until)?;
         let synchronized_at = parse_time(&synchronized_at)?;
-        let denied = |reason_code: OfflineAuthorizationReason, reason: &str| {
-            OfflineAuthorizationResult {
+        let denied =
+            |reason_code: OfflineAuthorizationReason, reason: &str| OfflineAuthorizationResult {
                 policy_id: Some(policy_uuid),
                 policy_version: Some(version),
                 action_type: action.clone(),
@@ -330,8 +330,7 @@ impl Store {
                 reason_code,
                 reason: reason.into(),
                 policy_valid_until: Some(policy_valid_until.clone()),
-            }
-        };
+            };
         if now < valid_from_at {
             return Ok(denied(
                 OfflineAuthorizationReason::NotEffective,
