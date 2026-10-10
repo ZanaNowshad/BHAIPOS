@@ -7,6 +7,7 @@ use bhaipos_store::{
     BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
     BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
     CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
+    AssignCustomRoleRequest, ConfigureCustomRoleRequest,
     LocalBootstrapRequest, ManagerApprovalGrant, NewProduct, OfflineActionRuleInput,
     OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput,
     RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
@@ -88,6 +89,7 @@ fn fixture() -> Fixture {
         ("delivery.settle", "Settle courier cash custody"),
         ("employee.manage", "Manage employee records"),
         ("employee.security.manage", "Manage employee credentials"),
+        ("role.manage", "Manage custom roles"),
         ("attendance.clock", "Record attendance events"),
         ("attendance.manage", "Resolve attendance exceptions"),
         ("attendance.view", "View attendance reports"),
@@ -375,6 +377,127 @@ fn administrative_user_security_is_scoped_idempotent_and_immutable() {
         params![first.event_id.to_string()],
     );
     assert!(immutable.is_err());
+}
+
+#[test]
+fn custom_roles_are_versioned_payload_bound_and_branch_assigned() {
+    let mut f = fixture();
+    let now = t("2026-09-29T02:15:00Z");
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let operation_id = OperationId::new();
+    let create = ConfigureCustomRoleRequest {
+        context,
+        actor_user_id: f.user,
+        operation_id,
+        role_name: "Returns Clerk".into(),
+        permission_codes: vec!["sale.refund".into(), "receipt.reprint".into()],
+        reason: "Create least-privilege returns desk role".into(),
+        now,
+    };
+    let first = f.store.configure_custom_role(create.clone()).unwrap();
+    assert_eq!(first.version, 1);
+    assert_eq!(
+        first,
+        f.store.configure_custom_role(create.clone()).unwrap()
+    );
+    let mismatch = f.store.configure_custom_role(ConfigureCustomRoleRequest {
+        permission_codes: vec!["sale.checkout".into()],
+        ..create
+    });
+    assert!(matches!(mismatch, Err(StoreError::Conflict(_))));
+    let updated = f
+        .store
+        .configure_custom_role(ConfigureCustomRoleRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            role_name: "Returns Clerk".into(),
+            permission_codes: vec!["receipt.reprint".into(), "sale.refund".into(), "sale.hold".into()],
+            reason: "Permit carts to be held during return review".into(),
+            now: now + chrono::Duration::seconds(1),
+        })
+        .unwrap();
+    assert_eq!(updated.version, 2);
+    let target = UserId::new();
+    f.store
+        .create_user(
+            target,
+            f.tenant,
+            "Returns Employee",
+            &hash_pin("6420").unwrap(),
+            now,
+        )
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE users SET employee_no='EMP-RETURNS' WHERE id=?1",
+            params![target.to_string()],
+        )
+        .unwrap();
+    let assign_operation = OperationId::new();
+    let assignment = f
+        .store
+        .assign_custom_role(AssignCustomRoleRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: assign_operation,
+            target_employee_no: "EMP-RETURNS".into(),
+            role_name: "Returns Clerk".into(),
+            assigned: true,
+            reason: "Assign returns desk duties".into(),
+            now,
+        })
+        .unwrap();
+    assert_eq!(assignment.assigned, Some(true));
+    assert_eq!(
+        assignment,
+        f.store
+            .assign_custom_role(AssignCustomRoleRequest {
+                context,
+                actor_user_id: f.user,
+                operation_id: assign_operation,
+                target_employee_no: "EMP-RETURNS".into(),
+                role_name: "Returns Clerk".into(),
+                assigned: true,
+                reason: "Assign returns desk duties".into(),
+                now,
+            })
+            .unwrap()
+    );
+    assert!(f
+        .store
+        .user_has_permission(context, target, "sale.refund")
+        .unwrap());
+    f.store
+        .assign_custom_role(AssignCustomRoleRequest {
+            context,
+            actor_user_id: f.user,
+            operation_id: OperationId::new(),
+            target_employee_no: "EMP-RETURNS".into(),
+            role_name: "Returns Clerk".into(),
+            assigned: false,
+            reason: "Return desk assignment ended".into(),
+            now: now + chrono::Duration::seconds(2),
+        })
+        .unwrap();
+    assert!(!f
+        .store
+        .user_has_permission(context, target, "sale.refund")
+        .unwrap());
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "UPDATE role_administration_events SET reason='rewritten' WHERE id=?1",
+            params![first.event_id.to_string()],
+        )
+        .is_err());
 }
 
 #[test]

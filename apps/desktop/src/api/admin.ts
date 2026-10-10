@@ -143,6 +143,16 @@ export type UserSecurityResult = {
   event_type: string;
 };
 
+export type RoleAdministrationResult = {
+  event_id:string; role_id:string; role_name:string; version:number;
+  permission_codes:string[]; target_user_id:string|null; assigned:boolean|null;
+};
+
+export type RoleAdministrationCatalog = {
+  permissions:[string,string][];
+  custom_roles:[string,string,number,string[]][];
+};
+
 export const adminApi = {
   diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
   diagnosticSnapshots: () => invoke<DiagnosticSnapshot[]>('list_diagnostic_snapshots'),
@@ -154,6 +164,11 @@ export const adminApi = {
     invoke<OfflinePolicyResult>('configure_offline_policy', { request }),
   administerUserSecurity: (request: { operationId:string; targetEmployeeNo:string; action:UserSecurityAction; newPin?:string; reason:string }) =>
     invoke<UserSecurityResult>('administer_user_security', { request }),
+  roleAdministrationCatalog: () => invoke<RoleAdministrationCatalog>('role_administration_catalog'),
+  configureCustomRole: (request:{operationId:string;roleName:string;permissionCodes:string[];reason:string}) =>
+    invoke<RoleAdministrationResult>('configure_custom_role',{request}),
+  assignCustomRole: (request:{operationId:string;targetEmployeeNo:string;roleName:string;assigned:boolean;reason:string}) =>
+    invoke<RoleAdministrationResult>('assign_custom_role',{request}),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (

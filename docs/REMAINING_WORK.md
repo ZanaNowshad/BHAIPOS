@@ -1,7 +1,7 @@
 # BHAIPOS Remaining Work Master Checklist
 
 Assessment date: 2026-10-10
-Baseline: public `main` commit `f929dd2f89484cae4ad19a23be26c3481e73285e`
+Baseline: public `main` commit `d4ce619146f548628c68f5862821a858513f83e0`
 Source of truth: `docs/REQUIREMENT_COVERAGE.md`, `docs/IMPLEMENTATION_STATUS.md`, and the repository at the baseline above.
 
 This is the dependency-ordered backlog for taking BHAIPOS from its current state to a production release. A checked source-code task is not automatically a completed capability. Each capability must also satisfy the common completion gate below.
@@ -27,7 +27,7 @@ Coverage distribution at this baseline:
 | NOT STARTED | 11 | 17.2% |
 | BLOCKED | 1 | 1.6% |
 
-Since the prior checklist baseline, bounded offline policy enforcement and atomic refund/cash manager approval are merged and verified by GitHub Actions runs `38083103186` and `38083904854`. Branch-scoped administrative PIN reset, unlock, suspension/reactivation, explicit Argon2id parameters and successful-login hash upgrade are the active Step 2 coding gate; remaining sensitive actions, reconciliation and Windows runtime evidence remain.
+Bounded offline policy enforcement, atomic refund/cash manager approval, and branch-scoped identity recovery are merged and verified by GitHub Actions runs `38083103186`, `38083904854`, and `38091080036`. Versioned custom-role permission and branch-assignment administration is the active Step 2 coding gate; remaining sensitive actions, reconciliation and Windows runtime evidence remain.
 
 ## Common completion gate for every capability
 
@@ -65,8 +65,8 @@ Since the prior checklist baseline, bounded offline policy enforcement and atomi
 - [ ] Enforce credential/policy expiry for disconnected login and protected actions. **IN PROGRESS:** login, checkout, customer credit, refund, and cash-event decisions are enforced in the trusted desktop boundary; refund/cash manager approval consumption is implemented in the working tree; remaining schema-ready sensitive commands, hub refresh, CI and Windows recovery evidence remain.
 - [x] Define configurable offline allow/manager-approval/deny rules for login, checkout, cash events, refund, void, price override, customer credit, stock adjustment, and supplier payment.
 - [ ] Add reconciliation outcomes for actions accepted under stale policy.
-- [ ] Finish administrative PIN reset, account unlock, suspension, and credential-upgrade workflows. **IN PROGRESS:** migration `0027_user_security_recovery.sql`, trusted device-bound/idempotent domain command, immutable security/audit/sync evidence, explicit Argon2id parameters, successful-login rehash and permission-gated Diagnostics UI are implemented in the working tree; Rust CI and Windows runtime recovery exercise remain.
-- [ ] Finish configurable custom-role and permission administration with change audit.
+- [ ] Finish administrative PIN reset, account unlock, suspension, and credential-upgrade workflows. **IN PROGRESS:** migration `0027_user_security_recovery.sql`, trusted device-bound/idempotent domain command, immutable security/audit/sync evidence, explicit Argon2id parameters and successful-login rehash pass CI run `38091080036`; clean-Windows recovery exercise remains.
+- [ ] Finish configurable custom-role and permission administration with change audit. **IN PROGRESS:** `0028_role_administration.sql`, payload-bound custom-role versioning, protected built-in roles, branch assignments, immutable event/audit/sync evidence and permission-gated admin UI are implemented in the working tree; Rust CI and Windows runtime exercise remain.
 - [ ] Integrate action-bound manager approval into every sensitive action. **IN PROGRESS:** void plus atomic offline refund/cash-event integration exist; price override, stock adjustment, supplier payment and other policy-controlled workflows remain.
 - [ ] Store approval signing keys in production-grade OS-backed custody and define rotation/recovery.
 - [ ] Add approval replay/expiry/action/payload/target/branch/device mismatch tests for every integrated action.

@@ -37,6 +37,8 @@ mod offline_policy_ops;
 mod procurement;
 #[path = "production.rs"]
 mod production;
+#[path = "role_ops.rs"]
+mod role_ops;
 
 const MIGRATION_0001: &str = include_str!("../../../migrations/0001_core.sql");
 const MIGRATION_0002: &str = include_str!("../../../migrations/0002_retail_os.sql");
@@ -70,9 +72,11 @@ const MIGRATION_0025: &str =
     include_str!("../../../migrations/0025_offline_authorization_policy.sql");
 const MIGRATION_0026: &str = include_str!("../../../migrations/0026_manager_approval_evidence.sql");
 const MIGRATION_0027: &str = include_str!("../../../migrations/0027_user_security_recovery.sql");
-pub const LATEST_SCHEMA: &str = "0027_user_security_recovery";
+const MIGRATION_0028: &str = include_str!("../../../migrations/0028_role_administration.sql");
+pub const LATEST_SCHEMA: &str = "0028_role_administration";
 
 pub use identity_ops::*;
+pub use role_ops::*;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -1212,6 +1216,7 @@ impl Store {
         }
         self.conn.execute_batch(MIGRATION_0026)?;
         self.conn.execute_batch(MIGRATION_0027)?;
+        self.conn.execute_batch(MIGRATION_0028)?;
         Ok(())
     }
     fn ensure_column(
@@ -1377,6 +1382,10 @@ impl Store {
             (
                 "employee.security.manage",
                 "Suspend, reactivate, unlock and reset staff credentials",
+            ),
+            (
+                "role.manage",
+                "Configure custom roles and branch assignments",
             ),
             ("attendance.clock", "Record employee clock and break events"),
             ("attendance.manage", "Resolve attendance exceptions"),
