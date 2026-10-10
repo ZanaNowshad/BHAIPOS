@@ -1,8 +1,8 @@
 # BHAIPOS Requirement Coverage Matrix
 
-Assessment date: 2026-10-09
-Authority baseline: public `main` commit `0480e2d23817a9e565498de50698b9c075b468e4`
-Working tree: durable redacted diagnostic export/history implementation verified by CI run `37998456402`
+Assessment date: 2026-10-10
+Authority baseline: public `main` commit `a72cba026c41382857724aab8862de72cb187f24`
+Working tree: offline-policy administration is the active Step 2 coding gate; the immutable bounded policy foundation is verified by CI run `37999637896`
 
 Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPLEMENTED — UNVERIFIED`, `VERIFIED`, and `BLOCKED`. A schema or screen alone is not treated as implementation.
 
@@ -20,7 +20,7 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 | 03.8 | Append-only inventory | IMPLEMENTED — UNVERIFIED | `0011_inventory_operations.sql`; immutable movement/lot evidence; stock and cost projections; permissioned ledger rebuild with repair evidence | Cargo execution and broader production/BOM movement coverage remain |
 | 03.9 | Fail-closed authorization | IMPLEMENTED — UNVERIFIED | Permission allow-list checks and denial test | Full command surface is not yet implemented |
 | 03.10 | Tamper-evident audit | IMPLEMENTED — UNVERIFIED | Per-device SHA-256 link topology, immutable triggers, tamper/fork/order regressions and fail-closed append; automatic alert producers append audit evidence in the source transaction | Operational verification UI and full producer coverage remain missing |
-| 04 | Offline authority and policy | IN PROGRESS | Local SQLite authority, atomic bootstrap and offline Argon2 PIN login; `0025_offline_authorization_policy.sql` plus trusted service provide immutable versioned branch rules, bounded policy/action staleness, device checkpoints, payload-bound activation and fail-closed unknown actions | Integrate policy decisions into login and each high-risk command, add administrative UI, remote refresh/revocation and reconciliation outcomes |
+| 04 | Offline authority and policy | IN PROGRESS | Local SQLite authority, atomic bootstrap and offline Argon2 PIN login; `0025_offline_authorization_policy.sql` plus trusted service provide immutable versioned branch rules, bounded policy/action staleness, device checkpoints, payload-bound activation and fail-closed unknown actions; authenticated desktop commands and a permission-scoped admin editor expose current device evidence and activate new immutable versions without renderer-provided authority; `offline_policy_is_versioned_bounded_payload_bound_and_fails_closed` covers read/manage denial, replay and active-rule retrieval | Integrate policy decisions into login and each high-risk command, add remote refresh/revocation and reconciliation outcomes; Rust CI and Windows runtime exercise remain |
 | 05 | Trusted terminal model | IMPLEMENTED — UNVERIFIED | Durable identity/binding, expiring one-use enrollment, Windows Credential Manager secret custody, versioned permissioned rotation, suspend/revoke and attribution | Rust/Windows execution, heartbeat service and remote enrollment UX missing |
 | 06 | Action-bound manager approval | IMPLEMENTED — UNVERIFIED | HMAC binding, expiry and nonce consumption; void consumes exact approval | Production key custody and broader sensitive-action integration missing |
 | 07 | Identity, RBAC, employees, attendance | IN PROGRESS | Argon2id PINs and lockout; separate employee records; `0017_attendance_operations.sql`; payload-bound clock/break events; immutable session evidence; missing-clock-out resolution; exact integer-second reports | PIN reset/admin unlock, custom-role UI, schedules and late/early classification, attendance UI and runtime exercise remain |
@@ -75,4 +75,4 @@ Status vocabulary is deliberately limited to `NOT STARTED`, `IN PROGRESS`, `IMPL
 
 ## Current highest-leverage next gate
 
-Exercise diagnostic export, printer hardware, and backup/restore interruption recovery on Windows before enabling restore for production deployment; meanwhile proceed with versioned bounded offline authorization policy.
+Integrate the bounded offline-policy decision into disconnected login and high-risk commands using a safe rollout/default strategy; separately exercise diagnostic export, printer hardware, and backup/restore interruption recovery on Windows before production deployment.

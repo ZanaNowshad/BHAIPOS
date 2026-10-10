@@ -362,6 +362,7 @@ required_commands={
     'create_verified_backup','preview_verified_restore','restore_verified_backup',
     'configure_backup_schedule','get_operational_diagnostics',
     'list_diagnostic_snapshots','capture_redacted_diagnostics',
+    'get_active_offline_policy','configure_offline_policy',
 }
 registered=re.search(r'tauri::generate_handler!\[([^]]+)\]',desktop_bridge,re.S)
 assert registered, 'desktop command allow-list missing'
@@ -452,7 +453,7 @@ for symbol in ['operational_diagnostics','capture_diagnostic_snapshot','list_dia
 for trigger in ['guard_diagnostics_snapshot_scope','immutable_diagnostics_snapshots_update','immutable_diagnostics_snapshots_delete','guard_diagnostic_snapshot_operation_scope','immutable_diagnostic_snapshot_operations_update','immutable_diagnostic_snapshot_operations_delete']:
     assert trigger in triggers, trigger
 offline_policy_ops=(ROOT/'crates/bhaipos-store/src/offline_policy_ops.rs').read_text()
-for symbol in ['configure_offline_policy','offline_authorization','OFFLINE_POLICY_CONFIGURE','unknown offline action fails closed','offline policy evidence is stale']:
+for symbol in ['configure_offline_policy','active_offline_policy','offline_authorization','offline_policy.view','OFFLINE_POLICY_CONFIGURE','unknown offline action fails closed','offline policy evidence is stale']:
     assert symbol in offline_policy_ops, symbol
 for trigger in ['guard_offline_policy_scope','guard_offline_policy_retirement','immutable_offline_policy_delete','guard_offline_policy_rule_scope','immutable_offline_policy_rules_update','guard_device_offline_policy_state_insert','guard_device_offline_policy_state_update','immutable_device_offline_policy_state_delete']:
     assert trigger in triggers, trigger
@@ -460,7 +461,7 @@ credential_store=(ROOT/'apps/desktop/src-tauri/src/credential_store.rs').read_te
 assert 'keyring::Entry' in credential_store and 'write_device_secret' in desktop_bridge
 assert 'device_credential_secret' not in pos_api
 admin_api=(ROOT/'apps/desktop/src/api/admin.ts').read_text()
-for command in ['create_verified_backup','configure_backup_schedule','preview_verified_restore','restore_verified_backup','get_operational_diagnostics','list_diagnostic_snapshots','capture_redacted_diagnostics']:
+for command in ['create_verified_backup','configure_backup_schedule','preview_verified_restore','restore_verified_backup','get_operational_diagnostics','list_diagnostic_snapshots','capture_redacted_diagnostics','get_active_offline_policy','configure_offline_policy']:
     assert f"'{command}'" in admin_api, command
 for forbidden in ['destinationDirectory','safetyBackupDirectory','storagePath','diagnosticDirectory','outputPath']:
     assert forbidden not in admin_api, forbidden

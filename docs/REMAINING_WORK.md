@@ -1,10 +1,33 @@
 # BHAIPOS Remaining Work Master Checklist
 
-Assessment date: 2026-10-09  
-Baseline: public `main` commit `10fd27aca0df9ee9e9982f909616713f6c1f8a6c`  
+Assessment date: 2026-10-10
+Baseline: public `main` commit `a72cba026c41382857724aab8862de72cb187f24`
 Source of truth: `docs/REQUIREMENT_COVERAGE.md`, `docs/IMPLEMENTATION_STATUS.md`, and the repository at the baseline above.
 
 This is the dependency-ordered backlog for taking BHAIPOS from its current state to a production release. A checked source-code task is not automatically a completed capability. Each capability must also satisfy the common completion gate below.
+
+## Current completion snapshot
+
+These are two deliberately separate measurements. Coverage status describes how much of the specified system has an implementation foundation; the exit-task checklist measures production completion and therefore stays unchecked until the complete workflow and its recovery behavior are verified.
+
+| Measurement | Completed / total | Remaining | Meaning |
+|---|---:|---:|---|
+| Requirement coverage with implementation work | 52 / 64 (81.3%) | 12 / 64 (18.7%) | `VERIFIED`, `IMPLEMENTED — UNVERIFIED`, or `IN PROGRESS`; this is not a production-readiness percentage |
+| Fully verified requirement rows | 4 / 64 (6.3%) | 60 / 64 (93.7%) | Meets the current repository verification bar; clean-Windows and hardware gates still apply |
+| Master production exit tasks, Steps 1–17 | 11 / 189 (5.8%) | 178 / 189 (94.2%) | Only fully satisfied checklist items are checked; partially built capabilities remain unchecked |
+| External release inputs | 0 / 7 | 7 / 7 | Windows/hardware/hub/provider/signing/policy inputs not available in this environment |
+
+Coverage distribution at this baseline:
+
+| Status | Count | Share |
+|---|---:|---:|
+| VERIFIED | 4 | 6.3% |
+| IMPLEMENTED — UNVERIFIED | 23 | 35.9% |
+| IN PROGRESS | 25 | 39.1% |
+| NOT STARTED | 11 | 17.2% |
+| BLOCKED | 1 | 1.6% |
+
+Since the prior checklist baseline, the completed source work is: durable redacted diagnostic snapshots/exports and history, live non-secret printer reachability diagnostics, the immutable versioned bounded offline-policy domain foundation, and a permission-scoped policy read/configuration surface with explicit per-action rules. GitHub Actions runs `37998456402`, `37999043385`, and `37999637896` passed all configured jobs for the merged work. The administration branch passes the Python foundation verifier plus desktop TypeScript and production builds; Rust CI is required before merge. Policy enforcement and reconciliation remain the active Step 2 gate.
 
 ## Common completion gate for every capability
 
@@ -40,7 +63,7 @@ This is the dependency-ordered backlog for taking BHAIPOS from its current state
 
 - [x] Define versioned offline policy records and bounded offline authorization windows.
 - [ ] Enforce credential/policy expiry for disconnected login and protected actions.
-- [ ] Define offline allow/deny rules for refund, void, price override, credit, stock adjustment, supplier payment, and other high-risk actions.
+- [x] Define configurable offline allow/manager-approval/deny rules for login, checkout, cash events, refund, void, price override, customer credit, stock adjustment, and supplier payment.
 - [ ] Add reconciliation outcomes for actions accepted under stale policy.
 - [ ] Finish administrative PIN reset, account unlock, suspension, and credential-upgrade workflows.
 - [ ] Finish configurable custom-role and permission administration with change audit.
