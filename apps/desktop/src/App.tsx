@@ -29,6 +29,7 @@ export function App() {
   const [canManageOfflinePolicy,setCanManageOfflinePolicy]=useState(false);
   const [canManageUserSecurity,setCanManageUserSecurity]=useState(false);
   const [canManageRoles,setCanManageRoles]=useState(false);
+  const [canVerifyAudit,setCanVerifyAudit]=useState(false);
   const [diagnostics,setDiagnostics]=useState<OperationalDiagnostics|null>(null);
   const [offlinePolicy,setOfflinePolicy]=useState<OfflinePolicyDetail|null>(null);
   const [diagnosticSnapshots,setDiagnosticSnapshots]=useState<DiagnosticSnapshot[]>([]);
@@ -58,8 +59,8 @@ export function App() {
     setCart(snapshot); setSelected(null);
   },[]);
 
-  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,manageRoles:boolean,policyRecoveryRequired:boolean){
-    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy); setCanManageUserSecurity(manageUserSecurity); setCanManageRoles(manageRoles);
+  async function loggedIn(displayName:string,recoveredSession:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,manageRoles:boolean,verifyAudit:boolean,policyRecoveryRequired:boolean){
+    setCashierName(displayName); setCashSessionId(recoveredSession); setCanViewAlerts(viewAlerts); setCanManageAlerts(manageAlerts); setCanViewDiagnostics(viewDiagnostics); setCanExportDiagnostics(exportDiagnostics); setCanViewOfflinePolicy(viewOfflinePolicy); setCanManageOfflinePolicy(manageOfflinePolicy); setCanManageUserSecurity(manageUserSecurity); setCanManageRoles(manageRoles); setCanVerifyAudit(verifyAudit);
     if(policyRecoveryRequired){setOfflinePolicy(await adminApi.activeOfflinePolicy());setPhase('policy-recovery');setNotice('Selling is locked until a bounded offline policy is activated');return;}
     setPhase('cashier'); setNotice(recoveredSession?'Open shift recovered':'Signed in — open a shift for cash tenders');
     await newCart();
@@ -78,6 +79,11 @@ export function App() {
   async function administerUserSecurity(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string}):Promise<UserSecurityResult>{
     try{const result=await adminApi.administerUserSecurity({...request,operationId:crypto.randomUUID()});setNotice(`${result.display_name} · ${result.event_type.replaceAll('_',' ').toLowerCase()} · ${result.previous_status} → ${result.new_status}`);return result;}
     catch(error){setNotice(message(error));throw error;}
+  }
+
+  async function verifyAuditChain(){
+    try{const result=await adminApi.verifyAuditChain(crypto.randomUUID());setNotice(result.chain_valid?`Audit chain verified · ${result.event_count} events · ${result.verified_head_hash?.slice(0,12)??'empty chain'}`:`CRITICAL: audit chain verification failed · alert ${result.alert_id?.slice(0,8)}`);}
+    catch(error){setNotice(message(error));}
   }
 
   async function captureDiagnostics(){
@@ -232,14 +238,14 @@ export function App() {
     catch(error){setNotice(message(error));}
   }
 
-  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setCanViewOfflinePolicy(false);setCanManageOfflinePolicy(false);setCanManageUserSecurity(false);setCanManageRoles(false);setAlerts([]);setDiagnostics(null);setOfflinePolicy(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
+  async function lock(){await posApi.logout();setCart(null);setCashSessionId(null);setCanViewAlerts(false);setCanManageAlerts(false);setCanViewDiagnostics(false);setCanExportDiagnostics(false);setCanViewOfflinePolicy(false);setCanManageOfflinePolicy(false);setCanManageUserSecurity(false);setCanManageRoles(false);setCanVerifyAudit(false);setAlerts([]);setDiagnostics(null);setOfflinePolicy(null);setDiagnosticSnapshots([]);setRestorePreview(null);setPhase('login');setNotice('Terminal locked');}
 
   if (phase==='loading') return <StatusScreen title="BHAIPOS" detail={notice}/>;
   if (phase==='setup') return <SetupScreen onReady={() => {setPhase('login');setNotice('Business initialized — sign in offline');}} setNotice={setNotice}/>;
   if (phase==='login') return <LoginScreen notice={notice} onLogin={loggedIn} setNotice={setNotice}/>;
   if (phase==='policy-recovery') return <OfflinePolicyRecoveryScreen policy={offlinePolicy} notice={notice} onConfigure={configureOfflinePolicy} onLock={lock}/>;
   if (phase==='admin') return <AlertCentre alerts={alerts} canManage={canManageAlerts} notice={notice} onTransition={transitionAlert} onRefresh={showAlertCentre} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
-  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} canManageUserSecurity={canManageUserSecurity} canManageRoles={canManageRoles} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onAdministerUserSecurity={administerUserSecurity} onNotice={setNotice} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
+  if (phase==='diagnostics'&&diagnostics) return <DiagnosticsCentre diagnostics={diagnostics} snapshots={diagnosticSnapshots} preview={restorePreview} offlinePolicy={offlinePolicy} notice={notice} canViewAlerts={canViewAlerts} canExport={canExportDiagnostics} canViewOfflinePolicy={canViewOfflinePolicy} canManageOfflinePolicy={canManageOfflinePolicy} canManageUserSecurity={canManageUserSecurity} canManageRoles={canManageRoles} canVerifyAudit={canVerifyAudit} onAlerts={showAlertCentre} onRefresh={showDiagnostics} onCapture={captureDiagnostics} onConfigureOfflinePolicy={configureOfflinePolicy} onAdministerUserSecurity={administerUserSecurity} onVerifyAudit={verifyAuditChain} onNotice={setNotice} onBackup={createBackup} onSchedule={configureSchedule} onPreview={previewLatestRestore} onRestore={restoreLatest} onCashier={()=>{setPhase('cashier');restoreFocus();}} onLock={lock}/>;
   if (!cart) return <StatusScreen title="Preparing cashier" detail={notice}/>;
 
   return <div className="app-shell">
@@ -294,9 +300,9 @@ function CashControlModal({onSubmit,onCancel,onError}:{onSubmit:(kind:CashMoveme
 
 function StatusScreen({title,detail}:{title:string;detail:string}){return <main className="auth-screen"><section><h1>{title}</h1><p>{detail}</p></section></main>;}
 
-function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,manageRoles:boolean,policyRecoveryRequired:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
+function LoginScreen({notice,onLogin,setNotice}:{notice:string;onLogin:(name:string,session:string|null,viewAlerts:boolean,manageAlerts:boolean,viewDiagnostics:boolean,exportDiagnostics:boolean,viewOfflinePolicy:boolean,manageOfflinePolicy:boolean,manageUserSecurity:boolean,manageRoles:boolean,verifyAudit:boolean,policyRecoveryRequired:boolean)=>Promise<void>;setNotice:(value:string)=>void}){
   const [employeeNo,setEmployeeNo]=useState('');const [pin,setPin]=useState('');const [busy,setBusy]=useState(false);
-  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy,result.canManageUserSecurity,result.canManageRoles,result.offlinePolicyRecoveryRequired);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
+  async function submit(event:FormEvent){event.preventDefault();setBusy(true);try{const result=await posApi.login({employeeNo,pin});await onLogin(result.displayName,result.cashSessionId,result.canViewAlerts,result.canManageAlerts,result.canViewDiagnostics,result.canExportDiagnostics,result.canViewOfflinePolicy,result.canManageOfflinePolicy,result.canManageUserSecurity,result.canManageRoles,result.canVerifyAudit,result.offlinePolicyRecoveryRequired);}catch(error){setNotice(message(error));}finally{setBusy(false);}}
   return <main className="auth-screen"><form onSubmit={submit}><h1>BHAIPOS</h1><p>{notice}</p><label>Employee number<input value={employeeNo} onChange={event=>setEmployeeNo(event.target.value)} autoFocus required/></label><label>PIN<input value={pin} onChange={event=>setPin(event.target.value)} type="password" inputMode="numeric" required/></label><button className="primary" disabled={busy}>Sign in offline</button></form></main>;
 }
 
@@ -323,7 +329,7 @@ function OfflinePolicyRecoveryScreen({policy,notice,onConfigure,onLock}:{policy:
   </div>;
 }
 
-function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,canViewAlerts,canExport,canViewOfflinePolicy,canManageOfflinePolicy,canManageUserSecurity,canManageRoles,onAlerts,onRefresh,onCapture,onConfigureOfflinePolicy,onAdministerUserSecurity,onNotice,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;offlinePolicy:OfflinePolicyDetail|null;notice:string;canViewAlerts:boolean;canExport:boolean;canViewOfflinePolicy:boolean;canManageOfflinePolicy:boolean;canManageUserSecurity:boolean;canManageRoles:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onConfigureOfflinePolicy:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onAdministerUserSecurity:(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string})=>Promise<UserSecurityResult>;onNotice:(value:string)=>void;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
+function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,canViewAlerts,canExport,canViewOfflinePolicy,canManageOfflinePolicy,canManageUserSecurity,canManageRoles,canVerifyAudit,onAlerts,onRefresh,onCapture,onConfigureOfflinePolicy,onAdministerUserSecurity,onVerifyAudit,onNotice,onBackup,onSchedule,onPreview,onRestore,onCashier,onLock}:{diagnostics:OperationalDiagnostics;snapshots:DiagnosticSnapshot[];preview:RestorePreview|null;offlinePolicy:OfflinePolicyDetail|null;notice:string;canViewAlerts:boolean;canExport:boolean;canViewOfflinePolicy:boolean;canManageOfflinePolicy:boolean;canManageUserSecurity:boolean;canManageRoles:boolean;canVerifyAudit:boolean;onAlerts:()=>Promise<void>;onRefresh:()=>Promise<void>;onCapture:()=>Promise<void>;onConfigureOfflinePolicy:(request:Omit<ConfigureOfflinePolicy,'operationId'>)=>Promise<void>;onAdministerUserSecurity:(request:{targetEmployeeNo:string;action:UserSecurityAction;newPin?:string;reason:string})=>Promise<UserSecurityResult>;onVerifyAudit:()=>Promise<void>;onNotice:(value:string)=>void;onBackup:()=>Promise<void>;onSchedule:()=>Promise<void>;onPreview:()=>Promise<void>;onRestore:()=>Promise<void>;onCashier:()=>void;onLock:()=>Promise<void>}){
   const healthy=diagnostics.database_integrity==='ok'&&diagnostics.foreign_key_violations===0;
   const policyState=offlinePolicyEvidenceState(offlinePolicy);
   return <div className="admin-shell">
@@ -337,6 +343,7 @@ function DiagnosticsCentre({diagnostics,snapshots,preview,offlinePolicy,notice,c
       {canManageUserSecurity&&<section className="admin-panels"><UserSecurityPanel onSubmit={onAdministerUserSecurity}/><article><h2>Credential recovery controls</h2><p>Each action is branch-scoped, device-attributed, idempotent, and preserved in immutable security and hash-chained audit evidence.</p><small>PIN resets do not unlock a locked account. Use the separate unlock action after reviewing the lockout evidence.</small></article></section>}
       {canManageRoles&&<RoleAdministrationPanel onNotice={onNotice}/>}
       <section className="admin-panels"><article><h2>Redacted diagnostic evidence</h2><p>Exports contain scoped operational evidence without database paths, backup paths, PINs, credentials, cookies, or provider secrets.</p>{canExport?<button className="primary" onClick={onCapture}>Capture and export diagnostics</button>:<small>Export permission is not assigned.</small>}</article><article><h2>Immutable snapshot history</h2>{snapshots.length===0?<p>No diagnostic snapshots captured.</p>:<div className="snapshot-list">{snapshots.map(snapshot=><div key={snapshot.snapshot_id}><b>{new Date(snapshot.created_at).toLocaleString()}</b><small>{snapshot.app_version} · schema {snapshot.schema_version} · SHA-256 {snapshot.payload_sha256}</small></div>)}</div>}</article></section>
+      {canVerifyAudit&&<section className="admin-panels"><article><h2>Tamper-evident audit chain</h2><p>Verify every local event hash and link for this terminal. Failures create a durable critical security alert without rewriting evidence.</p><button className="primary" onClick={onVerifyAudit}>Verify audit chain now</button></article><article><h2>Failure procedure</h2><p>On failure, stop sensitive operations, preserve the database and WAL/SHM files, export redacted diagnostics, and escalate for forensic recovery.</p></article></section>}
     </main>
   </div>;
 }

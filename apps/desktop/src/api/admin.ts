@@ -153,6 +153,11 @@ export type RoleAdministrationCatalog = {
   custom_roles:[string,string,number,string[]][];
 };
 
+export type AuditVerificationResult = {
+  verification_id:string; chain_valid:boolean; event_count:number;
+  verified_head_hash:string|null; alert_id:string|null; verified_at:string;
+};
+
 export const adminApi = {
   diagnostics: () => invoke<OperationalDiagnostics>('get_operational_diagnostics'),
   diagnosticSnapshots: () => invoke<DiagnosticSnapshot[]>('list_diagnostic_snapshots'),
@@ -169,6 +174,8 @@ export const adminApi = {
     invoke<RoleAdministrationResult>('configure_custom_role',{request}),
   assignCustomRole: (request:{operationId:string;targetEmployeeNo:string;roleName:string;assigned:boolean;reason:string}) =>
     invoke<RoleAdministrationResult>('assign_custom_role',{request}),
+  verifyAuditChain: (operationId:string) =>
+    invoke<AuditVerificationResult>('verify_local_audit_chain',{request:{operationId}}),
   createBackup: (operationId: string) =>
     invoke<BackgroundJobResult>('create_verified_backup', { request: { operationId } }),
   configureBackupSchedule: (

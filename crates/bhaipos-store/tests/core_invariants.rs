@@ -89,6 +89,7 @@ fn fixture() -> Fixture {
         ("employee.manage", "Manage employee records"),
         ("employee.security.manage", "Manage employee credentials"),
         ("role.manage", "Manage custom roles"),
+        ("audit.verify", "Verify audit chain"),
         ("attendance.clock", "Record attendance events"),
         ("attendance.manage", "Resolve attendance exceptions"),
         ("attendance.view", "View attendance reports"),
@@ -2466,6 +2467,83 @@ fn audit_chain_detects_tampering() {
         .execute("UPDATE audit_events SET payload_json='tampered'", [])
         .unwrap();
     assert!(!f.store.audit_chain_valid(f.tenant, f.device).unwrap());
+}
+
+#[test]
+fn audit_verification_is_replay_safe_and_alerts_without_rewriting_tampered_evidence() {
+    let mut f = fixture();
+    let context = bhaipos_store::LocalTerminalContext {
+        tenant_id: f.tenant,
+        branch_id: f.branch,
+        device_id: f.device,
+        register_id: f.register,
+    };
+    let now = t("2026-09-29T01:15:00Z");
+    let operation_id = OperationId::new();
+    let valid = f
+        .store
+        .verify_local_audit_chain(context, f.user, operation_id, now)
+        .unwrap();
+    assert!(valid.chain_valid);
+    assert!(valid.event_count > 0);
+    assert!(valid.alert_id.is_none());
+    assert_eq!(
+        valid,
+        f.store
+            .verify_local_audit_chain(context, f.user, operation_id, now)
+            .unwrap()
+    );
+    f.store
+        .connection()
+        .execute("DROP TRIGGER immutable_audit_events_update", [])
+        .unwrap();
+    f.store
+        .connection()
+        .execute(
+            "UPDATE audit_events SET payload_json='tampered' WHERE id=(SELECT id FROM audit_events WHERE tenant_id=?1 AND device_id=?2 LIMIT 1)",
+            params![f.tenant.to_string(), f.device.to_string()],
+        )
+        .unwrap();
+    let invalid = f
+        .store
+        .verify_local_audit_chain(
+            context,
+            f.user,
+            OperationId::new(),
+            now + chrono::Duration::seconds(1),
+        )
+        .unwrap();
+    assert!(!invalid.chain_valid);
+    let alert_id = invalid.alert_id.unwrap();
+    assert_eq!(
+        f.store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM operational_alerts WHERE id=?1 AND severity='CRITICAL' AND alert_type='SECURITY_EVENT' AND status='NEW'",
+                params![alert_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    let repeated = f
+        .store
+        .verify_local_audit_chain(
+            context,
+            f.user,
+            OperationId::new(),
+            now + chrono::Duration::seconds(2),
+        )
+        .unwrap();
+    assert_eq!(repeated.alert_id, Some(alert_id));
+    assert!(f
+        .store
+        .connection()
+        .execute(
+            "UPDATE audit_verification_runs SET chain_valid=1 WHERE id=?1",
+            params![invalid.verification_id.to_string()],
+        )
+        .is_err());
 }
 
 #[test]

@@ -17,8 +17,8 @@ Implemented in source:
 - HMAC-SHA256 manager approvals bound to tenant, approver, device, operation, action, entity, payload hash, nonce, and expiry; consumed nonces are single-use.
 - Fail-closed RBAC checks in checkout, refund, sale void, cash-session opening/closing, and cash movements.
 - EAN/PLU/weighted-barcode primitives and unknown-barcode capture.
-- SQLite schema for the retail operating model foundation (178 tables).
-- Cross-tenant, financial-domain and immutable-ledger guards (281 triggers).
+- SQLite schema for the retail operating model foundation (179 tables).
+- Cross-tenant, financial-domain and immutable-ledger guards (284 triggers).
 - Persistent carts and held-cart state.
 - Server-authoritative checkout recomputation.
 - Exact split-tender validation, cash tender/change, BenefitPay `RECORDED_NOT_SETTLED` evidence boundary.
@@ -58,7 +58,7 @@ BHAIPOS/
 │   ├── 0007_local_terminal_binding.sql
 │   ├── 0008_receipt_reprint_permission.sql
 │   ├── 0009_print_leases_and_profiles.sql
-│   └── … through 0028_role_administration.sql
+│   └── … through 0029_audit_verification.sql
 ├── apps/desktop/
 │   ├── src/                # React cashier/admin shell
 │   └── src-tauri/          # restricted Tauri bootstrap
