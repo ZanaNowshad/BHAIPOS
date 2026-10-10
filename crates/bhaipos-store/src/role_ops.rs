@@ -172,7 +172,9 @@ impl Store {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let (role_id, version, event_type, previous_permissions) = if let Some((id, version)) = existing {
+        let (role_id, version, event_type, previous_permissions) = if let Some((id, version)) =
+            existing
+        {
             let previous = tx
                 .prepare("SELECT permission_code FROM role_permissions WHERE role_id=?1 ORDER BY permission_code")?
                 .query_map(params![id], |row| row.get(0))?
@@ -229,9 +231,27 @@ impl Store {
             assigned: None,
         };
         let payload = serde_json::to_string(&result)?;
-        Self::append_audit(&tx,req.context.tenant_id,req.context.device_id,req.actor_user_id,"CUSTOM_ROLE_CONFIGURED","role",&role_id,&payload,req.now)?;
+        Self::append_audit(
+            &tx,
+            req.context.tenant_id,
+            req.context.device_id,
+            req.actor_user_id,
+            "CUSTOM_ROLE_CONFIGURED",
+            "role",
+            &role_id,
+            &payload,
+            req.now,
+        )?;
         tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'role',?6,'CONFIGURE',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.context.tenant_id.to_string(),req.context.branch_id.to_string(),req.context.device_id.to_string(),req.operation_id.to_string(),role_id,payload,req.now.to_rfc3339()])?;
-        Self::record_store_operation(&tx,req.context.tenant_id,req.operation_id,"ROLE_CONFIGURE",&digest,&result,req.now)?;
+        Self::record_store_operation(
+            &tx,
+            req.context.tenant_id,
+            req.operation_id,
+            "ROLE_CONFIGURE",
+            &digest,
+            &result,
+            req.now,
+        )?;
         tx.commit()?;
         Ok(result)
     }
@@ -375,9 +395,31 @@ impl Store {
             assigned: Some(req.assigned),
         };
         let payload = serde_json::to_string(&result)?;
-        Self::append_audit(&tx,req.context.tenant_id,req.context.device_id,req.actor_user_id,if req.assigned{"CUSTOM_ROLE_ASSIGNED"}else{"CUSTOM_ROLE_UNASSIGNED"},"user",target_id,&payload,req.now)?;
+        Self::append_audit(
+            &tx,
+            req.context.tenant_id,
+            req.context.device_id,
+            req.actor_user_id,
+            if req.assigned {
+                "CUSTOM_ROLE_ASSIGNED"
+            } else {
+                "CUSTOM_ROLE_UNASSIGNED"
+            },
+            "user",
+            target_id,
+            &payload,
+            req.now,
+        )?;
         tx.execute("INSERT INTO sync_queue(id,tenant_id,branch_id,device_id,operation_id,entity_type,entity_id,mutation_type,payload_json,state,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'user',?6,'ROLE_ASSIGNMENT',?7,'PENDING',?8,?8)",params![Uuid::new_v4().to_string(),req.context.tenant_id.to_string(),req.context.branch_id.to_string(),req.context.device_id.to_string(),req.operation_id.to_string(),target_id,payload,req.now.to_rfc3339()])?;
-        Self::record_store_operation(&tx,req.context.tenant_id,req.operation_id,"ROLE_ASSIGNMENT",&digest,&result,req.now)?;
+        Self::record_store_operation(
+            &tx,
+            req.context.tenant_id,
+            req.operation_id,
+            "ROLE_ASSIGNMENT",
+            &digest,
+            &result,
+            req.now,
+        )?;
         tx.commit()?;
         Ok(result)
     }

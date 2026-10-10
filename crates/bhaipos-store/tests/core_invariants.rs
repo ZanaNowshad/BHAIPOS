@@ -4,14 +4,13 @@ use bhaipos_core::{
     TenderKind, UserId,
 };
 use bhaipos_store::{
-    BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome, BackupCreateRequest,
-    BackupScheduleRequest, CashMovementKind, CashMovementRequest, CheckoutRequest,
-    CloseCashSessionRequest, ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest,
-    AssignCustomRoleRequest, ConfigureCustomRoleRequest,
-    LocalBootstrapRequest, ManagerApprovalGrant, NewProduct, OfflineActionRuleInput,
-    OfflineAuthorizationReason, OfflinePolicyDecision, PaymentInput, RefundLineInput,
-    RefundRequest, RestoreBackupRequest, Store, StoreError, SyncDeliveryOutcome,
-    UserSecurityAction, UserSecurityRequest,
+    AssignCustomRoleRequest, BackgroundJobEnqueueRequest, BackgroundJobFinishOutcome,
+    BackupCreateRequest, BackupScheduleRequest, CashMovementKind, CashMovementRequest,
+    CheckoutRequest, CloseCashSessionRequest, ConfigureCustomRoleRequest,
+    ConfigureOfflinePolicyRequest, DiagnosticCaptureRequest, LocalBootstrapRequest,
+    ManagerApprovalGrant, NewProduct, OfflineActionRuleInput, OfflineAuthorizationReason,
+    OfflinePolicyDecision, PaymentInput, RefundLineInput, RefundRequest, RestoreBackupRequest,
+    Store, StoreError, SyncDeliveryOutcome, UserSecurityAction, UserSecurityRequest,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -417,7 +416,11 @@ fn custom_roles_are_versioned_payload_bound_and_branch_assigned() {
             actor_user_id: f.user,
             operation_id: OperationId::new(),
             role_name: "Returns Clerk".into(),
-            permission_codes: vec!["receipt.reprint".into(), "sale.refund".into(), "sale.hold".into()],
+            permission_codes: vec![
+                "receipt.reprint".into(),
+                "sale.refund".into(),
+                "sale.hold".into(),
+            ],
             reason: "Permit carts to be held during return review".into(),
             now: now + chrono::Duration::seconds(1),
         })
